@@ -1,0 +1,36 @@
+Spring AI is a framework for building AI-powered applications using the Spring ecosystem.
+It provides a consistent API across different AI model providers including OpenAI, Anthropic, Google, Azure, DeepSeek, Ollama, and many more.
+
+Key features of Spring AI include:
+
+1. Chat Models: Spring AI provides a unified ChatModel interface that works with multiple providers.
+You can easily switch between OpenAI GPT-4, Anthropic Claude, DeepSeek, or local models via Ollama
+without changing your application code.
+
+2. Embedding Models: Convert text into vector representations for similarity search.
+Spring AI supports OpenAI embeddings, local Transformers (ONNX), and provider-specific embedding models.
+
+3. Vector Stores: Spring AI integrates with 25+ vector databases including PgVector, Redis,
+Elasticsearch, MongoDB Atlas, Chroma, Milvus, Pinecone, Qdrant, Weaviate, and Neo4j.
+
+4. RAG (Retrieval Augmented Generation): Spring AI provides a modular RAG architecture with
+pluggable components for query transformation, document retrieval, post-processing, and context augmentation.
+The RetrievalAugmentationAdvisor orchestrates the full RAG pipeline.
+
+5. Function/Tool Calling: AI models can call Java methods as tools. Spring AI provides
+@Tool annotations and ToolCallback interfaces for seamless integration.
+
+6. ChatClient: A fluent API for building chat interactions with support for advisors,
+system prompts, and streaming responses.
+
+7. Chat Memory: Store and retrieve conversation history using various backends
+including JDBC, Redis, MongoDB, and vector stores for semantic memory search.
+
+8. MCP (Model Context Protocol): Spring AI supports the Model Context Protocol
+for standardized tool exposure and consumption across AI systems.
+
+9. Observability: Built-in support for Micrometer metrics and distributed tracing,
+aligned with OpenTelemetry semantic conventions for AI operations.
+
+10. Spring Boot Integration: Auto-configuration starters for all supported providers,
+making it easy to get started with just a few lines of configuration.

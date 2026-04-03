@@ -1,0 +1,34 @@
+services:
+  # PostgreSQL + PgVector（向量数据库，存储文档嵌入向量）
+  pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: pgvector
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: rag_demo
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  # MySQL（ERP 业务数据 + 对话记录 + 计费）
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-erp
+    ports:
+      - "13306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${ERP_DB_PASSWORD:-root}
+      MYSQL_DATABASE: erp
+      MYSQL_CHARSET: utf8mb4
+    volumes:
+      - mysqldata:/var/lib/mysql
+      - ./sql:/docker-entrypoint-initdb.d
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  mysqldata:
