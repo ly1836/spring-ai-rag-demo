@@ -95,6 +95,46 @@ mvn clean spring-boot:run
 
 访问 http://localhost:8080 即可使用。
 
+## Docker 部署
+
+### 使用预构建镜像（推荐）
+
+```bash
+docker pull ly753/spring-ai-rag-demo:latest
+
+docker run -d --name rag-demo \
+  --network host \
+  -e DEEPSEEK_API_KEY=sk-your-deepseek-key \
+  -e DASHSCOPE_API_KEY=sk-your-dashscope-key \
+  -e GOOGLE_GENAI_API_KEY=your-google-genai-key \
+  -e ERP_DB_PASSWORD=your-mysql-password \
+  ly753/spring-ai-rag-demo:latest
+```
+
+> 需先启动 PgVector 和 MySQL 中间件（见上方"中间件依赖"章节）。
+
+### 本地构建镜像
+
+```bash
+# 在项目根目录执行
+docker build -f deploy/Dockerfile -t ly753/spring-ai-rag-demo:latest .
+```
+
+构建相关文件位于 `deploy/` 目录：
+
+```
+deploy/
+├── Dockerfile         # 多阶段构建：Maven 编译 + JRE 运行
+└── settings.xml       # Maven 阿里云镜像源加速（解决国内网络问题）
+```
+
+### 使用 docker-compose 一键部署
+
+```bash
+# 启动全部服务（PgVector + MySQL + 应用）
+docker-compose up -d
+```
+
 ## 功能列表
 
 ### AI 对话

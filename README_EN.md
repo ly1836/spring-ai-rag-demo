@@ -95,6 +95,46 @@ mvn clean spring-boot:run
 
 Open http://localhost:8080 in your browser.
 
+## Docker Deployment
+
+### Use Pre-built Image (Recommended)
+
+```bash
+docker pull ly753/spring-ai-rag-demo:latest
+
+docker run -d --name rag-demo \
+  --network host \
+  -e DEEPSEEK_API_KEY=sk-your-deepseek-key \
+  -e DASHSCOPE_API_KEY=sk-your-dashscope-key \
+  -e GOOGLE_GENAI_API_KEY=your-google-genai-key \
+  -e ERP_DB_PASSWORD=your-mysql-password \
+  ly753/spring-ai-rag-demo:latest
+```
+
+> PgVector and MySQL must be running first (see "Middleware Dependencies" above).
+
+### Build Image Locally
+
+```bash
+# Run from project root
+docker build -f deploy/Dockerfile -t ly753/spring-ai-rag-demo:latest .
+```
+
+Build-related files are located in the `deploy/` directory:
+
+```
+deploy/
+├── Dockerfile         # Multi-stage build: Maven compile + JRE runtime
+└── settings.xml       # Aliyun Maven mirror for faster builds in China
+```
+
+### Deploy with docker-compose
+
+```bash
+# Start all services (PgVector + MySQL + Application)
+docker-compose up -d
+```
+
 ## Features
 
 ### AI Chat
