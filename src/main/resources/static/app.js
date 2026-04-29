@@ -31,6 +31,12 @@ let currentConversationId = null;
 let loadedHints = null;
 /** 当前选中的模型 ID */
 let currentModelId = '';
+/** 当前流式请求的 AbortController */
+let currentStreamController = null;
+/** 当前流式回复对应的气泡 DOM */
+let currentStreamBubble = null;
+/** 是否由用户主动终止当前流 */
+let isUserCancellingStream = false;
 
 // ============================================================
 //  通用工具
@@ -339,6 +345,43 @@ function addTypingIndicator() {
 /** 移除"正在输入"动画指示器 */
 function removeTypingIndicator() { const el = document.getElementById('typingMsg'); if (el) el.remove(); }
 
+/** 切换流式问答中的按钮和输入框视觉状态 */
+function setStreamingState(streaming) {
+  isStreaming = streaming;
+  var sendBtn = document.getElementById('sendBtn');
+  var stopBtn = document.getElementById('stopBtn');
+  var input = document.getElementById('questionInput');
+  sendBtn.disabled = streaming;
+  stopBtn.hidden = !streaming;
+  stopBtn.disabled = !streaming;
+  stopBtn.textContent = '停止';
+  input.classList.toggle('streaming', streaming);
+}
+
+/** 将助手气泡渲染为 Markdown，并可选追加“已终止”提示 */
+function renderAssistantBubble(bubble, text, cancelled) {
+  if (!bubble) return;
+  bubble.dataset.rawText = text || '';
+  if (!text) {
+    bubble.innerHTML = '<p>（未收到回复）</p>';
+  } else {
+    bubble.innerHTML = renderMarkdown(text);
+  }
+  if (cancelled) {
+    bubble.innerHTML += '<div class="stream-stop-note">回答已终止</div>';
+  }
+}
+
+/** 用户主动终止当前流式回答 */
+function stopStreaming() {
+  if (!isStreaming || !currentStreamController) return;
+  isUserCancellingStream = true;
+  var stopBtn = document.getElementById('stopBtn');
+  stopBtn.disabled = true;
+  stopBtn.textContent = '停止中...';
+  currentStreamController.abort();
+}
+
 // ============================================================
 //  聊天 — 发送问题（SSE 流式响应 + 实时 Markdown 渲染）
 // ============================================================
@@ -373,19 +416,23 @@ async function sendQuestion() {
   input.value = '';
   addMessage('user', question, mode);
   addTypingIndicator();
-  isStreaming = true;
-  document.getElementById('sendBtn').disabled = true;
+  setStreamingState(true);
+  isUserCancellingStream = false;
+  currentStreamBubble = null;
+  currentStreamController = new AbortController();
 
   try {
     const params = new URLSearchParams({ question, mode, conversationId: currentConversationId, modelId: currentModelId });
     // 建立 SSE 连接
     const res = await fetch(API + '/ask/stream?' + params, {
-      headers: { ...getHeaders(), 'Accept': 'text/event-stream' }
+      headers: { ...getHeaders(), 'Accept': 'text/event-stream' },
+      signal: currentStreamController.signal
     });
     if (!res.ok) { const t = await res.text(); throw new Error(res.status + ': ' + t); }
 
     removeTypingIndicator();
     const bubble = addMessage('assistant', '', mode);
+    currentStreamBubble = bubble;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let fullText = '';
@@ -408,7 +455,7 @@ async function sendQuestion() {
         fullText += parseSSEEventData(eventText);
       }
 
-      bubble.innerHTML = renderMarkdown(fullText);
+      renderAssistantBubble(bubble, fullText, false);
       document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
     }
 
@@ -417,19 +464,26 @@ async function sendQuestion() {
       fullText += parseSSEEventData(sseBuffer);
     }
 
-    if (!fullText) {
-      bubble.innerHTML = '<p>（未收到回复）</p>';
-    } else {
-      bubble.innerHTML = renderMarkdown(fullText);
+    renderAssistantBubble(bubble, fullText, false);
+    if (fullText) {
       highlightCodeBlocks(bubble);
     }
     document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
   } catch (e) {
     removeTypingIndicator();
-    addMessage('assistant', '请求失败: ' + e.message);
+    if (e.name === 'AbortError' && isUserCancellingStream) {
+      if (!currentStreamBubble) {
+        currentStreamBubble = addMessage('assistant', '', mode);
+      }
+      renderAssistantBubble(currentStreamBubble, currentStreamBubble.dataset.rawText || '', true);
+    } else {
+      addMessage('assistant', '请求失败: ' + e.message);
+    }
   } finally {
-    isStreaming = false;
-    document.getElementById('sendBtn').disabled = false;
+    currentStreamController = null;
+    currentStreamBubble = null;
+    isUserCancellingStream = false;
+    setStreamingState(false);
     input.focus();
   }
 }
@@ -537,6 +591,11 @@ async function loadMessages(conversationId) {
         '<div class="history-msg-header">' +
           '<span class="role-badge ' + m.role + '">' + (m.role === 'user' ? '用户' : '助手') + '</span>' +
           '<span>' + formatTime(m.createdAt) + '</span>' +
+          (m.status && m.status !== 'success'
+            ? '<span class="message-status-badge ' + escapeHtml(m.status) + '">' +
+                escapeHtml(({ cancelled: '已终止', error: '失败' })[m.status] || m.status) +
+              '</span>'
+            : '') +
           (m.totalTokens ? '<span>' + m.totalTokens + ' tokens</span>' : '') +
           (m.durationMs ? '<span>' + m.durationMs + 'ms</span>' : '') +
         '</div>' +

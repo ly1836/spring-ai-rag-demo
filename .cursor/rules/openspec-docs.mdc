@@ -1,0 +1,12 @@
+---
+description: OpenSpec 文档编写语言与结构约束
+globs: openspec/**/*.md
+alwaysApply: false
+---
+
+# OpenSpec 文档规则
+
+- `openspec/` 下的 `proposal.md`、`design.md`、`tasks.md`、`spec.md` 正文默认使用中文。
+- OpenSpec 工具可能依赖固定结构关键字；如模板或同步工具要求保留 `## ADDED Requirements`、`### Requirement:`、`#### Scenario:`、`## Purpose`、`## Requirements` 等结构标记时，可以保留这些英文结构词，但其后的标题、说明、场景内容应使用中文。
+- 若主 `spec` 由 change 下的 delta spec 同步而来，源 delta spec 也应优先写成中文，否则同步结果会延续源文档语言。
+- 编写 `spec.md` 时优先保证结构兼容性，其次保证语言一致性；不要为了翻译把 OpenSpec 所需层级或关键标记改坏。

@@ -62,7 +62,7 @@ public final class ConversationVO {
 	 * @param toolCallsCount   工具调用次数
 	 * @param ragDocCount      RAG 检索的文档片段数
 	 * @param durationMs       LLM 响应耗时（毫秒）
-	 * @param status           消息状态：success / error / timeout
+	 * @param status           消息状态：success / cancelled / error / timeout
 	 * @param errorMessage     错误信息（仅失败时有值）
 	 * @param createdAt        创建时间
 	 */

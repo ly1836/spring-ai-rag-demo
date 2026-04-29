@@ -87,7 +87,7 @@ spring:
       username: postgres
       password: postgres
     erp:
-      url: jdbc:mysql://localhost:13306/erp?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8
+      url: jdbc:mysql://localhost:13306/erp?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8&allowPublicKeyRetrieval=true
       username: ${ERP_DB_USER:root}
       password: ${ERP_DB_PASSWORD:mm#20250912}
       driver-class-name: com.mysql.cj.jdbc.Driver

@@ -1,0 +1,33 @@
+---
+description: AI 协作通用约定，适用于所有文件
+globs:
+alwaysApply: true
+---
+
+# AI 协作规则
+
+## 语言
+
+- 所有对话、注释说明、提交信息优先使用中文
+- 注释规则覆盖所有源码：Java / SQL / JavaScript / CSS / HTML（前端用 JSDoc 中文注释）
+
+## Commit 格式
+
+```
+<type>: <中文描述>
+
+AI-Generated: true
+AI-Tool: Cursor
+Reviewed-by: <git config user.name>
+```
+
+type: `feat` / `fix` / `refactor` / `docs` / `style` / `test` / `chore`
+
+## AI 行为约束
+
+1. 优先小提交（<500 行变更）
+2. 安全敏感代码必须经过人工审核
+3. 不确定的技术决策主动询问，不擅自决定
+4. 修改代码前先阅读相关上下文，理解现有设计意图
+5. 后端 API 改动时主动评估对前端的连带影响（请求/响应结构、错误码、SSE 协议），同步更新 `static/` 下相关文件
+6. 修改 `static/app.js` / `static/style.css` / `static/vendor/*` 后，必须更新 `static/index.html` 中对应资源的 `?v=N` 版本号，避免浏览器缓存导致前端不刷新

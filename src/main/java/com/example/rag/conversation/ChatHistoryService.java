@@ -89,9 +89,37 @@ public class ChatHistoryService {
 	public String saveAssistantMessageAndUpdateStats(String conversationId, String content, String mode,
 			String model, int promptTokens, int completionTokens, int totalTokens,
 			String toolCalls, int toolCallsCount, int ragDocCount, Integer durationMs) {
+		return saveAssistantMessageAndUpdateStats(conversationId, content, mode, model,
+			promptTokens, completionTokens, totalTokens, toolCalls, toolCallsCount, ragDocCount,
+			durationMs, "success", null);
+	}
+
+	/**
+	 * 【事务】保存助手消息并更新会话统计（支持自定义状态）。
+	 *
+	 * @param conversationId   会话 ID
+	 * @param content          LLM 生成的回答文本
+	 * @param mode             问答模式
+	 * @param model            使用的模型名称
+	 * @param promptTokens     输入 token 数
+	 * @param completionTokens 输出 token 数
+	 * @param totalTokens      总 token 数
+	 * @param toolCalls        工具调用记录（JSON）
+	 * @param toolCallsCount   工具调用次数
+	 * @param ragDocCount      RAG 检索文档数
+	 * @param durationMs       响应耗时（毫秒）
+	 * @param status           助手消息状态：success / cancelled / error
+	 * @param errorMessage     错误信息（仅失败时返回）
+	 * @return 助手消息 ID（UUID）
+	 */
+	@Transactional
+	public String saveAssistantMessageAndUpdateStats(String conversationId, String content, String mode,
+			String model, int promptTokens, int completionTokens, int totalTokens,
+			String toolCalls, int toolCallsCount, int ragDocCount, Integer durationMs,
+			String status, String errorMessage) {
 		String messageId = saveAssistantMessage(conversationId, content, mode,
 			model, promptTokens, completionTokens, totalTokens,
-			toolCalls, toolCallsCount, ragDocCount, durationMs);
+			toolCalls, toolCallsCount, ragDocCount, durationMs, status, errorMessage);
 		// 统计更新为非关键操作，失败不回滚事务
 		try {
 			updateConversationStats(conversationId);
@@ -154,9 +182,36 @@ public class ChatHistoryService {
 	public String saveAssistantMessage(String conversationId, String content, String mode,
 			String model, int promptTokens, int completionTokens, int totalTokens,
 			String toolCalls, int toolCallsCount, int ragDocCount, Integer durationMs) {
+		return saveAssistantMessage(conversationId, content, mode, model, promptTokens,
+			completionTokens, totalTokens, toolCalls, toolCallsCount, ragDocCount, durationMs,
+			"success", null);
+	}
+
+	/**
+	 * 保存 LLM 助手回复消息（支持自定义状态）。
+	 *
+	 * @param conversationId   所属会话 ID
+	 * @param content          LLM 生成的回答文本
+	 * @param mode             问答模式
+	 * @param model            使用的模型名称（如 deepseek-chat）
+	 * @param promptTokens     提示词消耗的 token 数
+	 * @param completionTokens 生成回答消耗的 token 数
+	 * @param totalTokens      总 token 数
+	 * @param toolCalls        工具调用记录（JSON 数组字符串）
+	 * @param toolCallsCount   工具调用次数
+	 * @param ragDocCount      RAG 检索的文档片段数
+	 * @param durationMs       LLM 响应耗时（毫秒）
+	 * @param status           消息状态：success / cancelled / error
+	 * @param errorMessage     错误信息（仅失败时有值）
+	 * @return 生成的消息 ID（UUID）
+	 */
+	public String saveAssistantMessage(String conversationId, String content, String mode,
+			String model, int promptTokens, int completionTokens, int totalTokens,
+			String toolCalls, int toolCallsCount, int ragDocCount, Integer durationMs,
+			String status, String errorMessage) {
 		return saveMessage(conversationId, "assistant", content, mode,
 			model, promptTokens, completionTokens, totalTokens,
-			toolCalls, toolCallsCount, ragDocCount, durationMs, "success", null);
+			toolCalls, toolCallsCount, ragDocCount, durationMs, status, errorMessage);
 	}
 
 	/**

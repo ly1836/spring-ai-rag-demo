@@ -1,0 +1,70 @@
+---
+description: Spring AI RAG Demo 项目专属架构与编码约束
+globs:
+alwaysApply: true
+---
+
+# Spring AI RAG Demo 项目规则
+
+> 实施新功能前，先阅读 `openspec/context/spring-ai-rag-demo.md` 了解架构、租户隔离与计费扣费约束。
+
+- **项目类型**: 单模块 Spring Boot 应用（非多模块 monorepo，无模块前缀概念）
+- **根包**: `com.example.rag`
+- **启动类**: `com.example.rag.RagDemoApplication`
+- **核心能力**: Tool Calling（@Tool 查 ERP MySQL）+ RAG（PgVector 检索产品手册）+ 多模型路由
+
+通用编码约定见 `openspec/config.yaml`。
+
+## 设计文档
+
+- 项目 context：`openspec/context/spring-ai-rag-demo.md`
+- 通用配置：`openspec/config.yaml`
+- 变更文档：`openspec/changes/<change-name>/`（按业务域命名，如 `chat-add-stream-mode`、`billing-monthly-quota`、`tool-purchase-order`）
+- **OpenSpec CLI**：在**仓库根目录**执行（如 `openspec list`）
+
+## 业务域包结构
+
+新增功能落到与业务语义一致的子包，避免根包堆积：
+
+- `chat/` — 智能问答入口（ChatController、ErpAssistantService、DocumentLoaderService、ModelRegistry）
+- `billing/` — 计费账户、配额校验、token 扣费、充值
+- `conversation/` — 对话历史、ChatMemory、JdbcChatMemoryRepository
+- `tool/` — ERP @Tool 方法集合（继承 `BaseTool`，按业务域拆分文件）
+- `config/` — 数据源、过滤器、租户上下文、全局异常、模型属性
+- `vo/` — 跨业务域共享的请求/响应 VO（同业务域内部 record 嵌套在 `XxxVO` 类中）
+- `src/main/resources/static/` — 前端资源（`index.html` / `app.js` / `style.css` / `vendor/`），前后端一体部署，无独立前端工程
+
+## 要求
+
+- **多租户隔离**：所有 ERP 查询**必须**继承 `tool/BaseTool` 并通过 `query()` / `queryWithAlias()` 执行 SQL，**禁止**直接使用 `erpJdbcTemplate.queryXxx()` 绕过 `ent_code` 注入
+- **租户上下文**：通过 `TenantContext.requireEntCode()` / `TenantContext.getUserIdOrDefault()` 读取，**禁止**从 Controller 参数或 Header 中重复解析；新建异步/响应式链路必须经过 `TenantContextAccessor` 透传，否则 reactor 线程切换后 `ent_code` 会丢失
+- **统一响应**：REST 接口返回 `RespVO<T>`（SSE 流式接口除外），业务异常**直接抛出** `IllegalStateException`/`IllegalArgumentException`，由 `GlobalExceptionHandler` 兜底转 `RespVO.error`，**禁止**在 Controller/Service 内自行 try-catch 包装错误码
+- **数据源**：VectorStore 自动配置依赖 `@Primary` 的 PgVector 数据源；ERP 业务查询**必须**注入 `@Qualifier("erpJdbcTemplate") JdbcTemplate`
+- **ChatModel 路由**：多模型场景统一通过 `ModelRegistry` 按 `modelId` 路由，**禁止**在业务代码中直接注入 `deepSeekChatModel` / `openAiChatModel` 等特定 provider Bean
+- **计费扣费**：每次 LLM 调用入口前置 `BillingService.checkQuota()`，调用后按 `Usage` 调用 `BillingService.deductTokens()`；新增问答模式（mode）时**必须**走相同的前后置流程
+- **SQL 参数化**：严禁 SQL 字符串拼接动态值，全部通过 `?` 占位 + 参数列表传入
+- **依赖注入**：使用构造器注入 + `private final` 字段，**禁止** `@Autowired` 字段注入
+
+## 前端
+
+> 详细规范见 `openspec/context/spring-ai-rag-demo.md` 的「前端」章节。
+
+- **位置**: `src/main/resources/static/`，**原生** HTML / CSS / JS，无 npm / webpack / vite 等构建工具
+- **资源放行**: `TenantFilter` 仅拦截 `/api/**`；新增静态资源路径无需额外配置 `WebMvcConfigurer`
+- **API 调用**: 统一使用 `apiCall(url, options)` / `apiPost(url, body)`，自动附加 `X-Ent-Code` / `X-User-Id` 与 `RespVO` 解包，**禁止**绕过这两个函数直接 `fetch`（SSE 流式 `/api/ask/stream` 除外，但仍需经 `getHeaders()` 注入租户头）
+- **API 路径前缀**: 统一通过 `const API = '/api'`，**禁止**硬编码 `'/api/xxx'` 字符串
+- **会话 ID**: 首次提问时 `crypto.randomUUID()` 生成 `currentConversationId`，会话内复用；切会话调 `newConversation()` 重置
+- **Markdown / 代码高亮**: 助手消息用 `marked.parse()` 渲染，流式结束后 `hljs.highlightElement()` 高亮
+- **XSS 防护**: 任何动态值拼入 `innerHTML` 前必须 `escapeHtml()`；优先用 `document.createElement` + `textContent`
+- **样式主题**: 颜色与圆角通过 `:root` CSS 变量管理（`--primary` / `--bg` / `--error` 等），**禁止**硬编码 `#xxxxxx`
+- **第三方库**: 放到 `static/vendor/` 本地化引用，**禁止**直连 CDN
+- **缓存破坏**: 修改 `app.js` / `style.css` / `vendor/*` 后必须把 `index.html` 中对应的 `?v=N` 版本号 +1
+- **反馈与错误**: 操作反馈统一调 `showToast(msg, type)`（`success` / `error`）；列表内错误用 `<p style="color:var(--error);">`，**禁止** `alert()`
+- **JSDoc 中文注释**: 新增函数必须写中文 JSDoc，按现有 `// ===` 分块顺序追加
+
+## 提示
+
+- 新增 `@Tool` 方法时，`description` 要写得足够具体，LLM 据此判断何时调用；参数也用 `@ToolParam` 标注语义
+- 新增配置项请同步更新 `application.yml` 注释和 `ModelProperties` 等绑定类
+- ERP 表新增 `ent_code` 字段后，确保所有相关 SQL 走 `BaseTool` 的隔离方法
+- 新增/修改后端 API 时，同步评估前端 `app.js` 是否需要联动（保持 `RespVO` 解包链路一致）

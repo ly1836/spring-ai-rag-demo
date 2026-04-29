@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ERP 智能助手</title>
-  <link rel="stylesheet" href="style.css?v=7">
+  <link rel="stylesheet" href="style.css?v=8">
   <link rel="stylesheet" href="vendor/highlight-github.min.css?v=1">
 </head>
 <body>
@@ -90,6 +90,7 @@
           </div>
           <div class="chat-input-row">
             <textarea id="questionInput" placeholder="输入你的问题..." onkeydown="handleInputKey(event)"></textarea>
+            <button class="stop-btn" id="stopBtn" onclick="stopStreaming()" hidden>停止</button>
             <button class="send-btn" id="sendBtn" onclick="sendQuestion()">&#10148;</button>
           </div>
         </div>
@@ -152,6 +153,6 @@
 
   <script src="vendor/marked.min.js?v=1"></script>
   <script src="vendor/highlight.min.js?v=1"></script>
-  <script src="app.js?v=9"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>

@@ -23,6 +23,7 @@ import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.SignalType;
 import reactor.core.scheduler.Schedulers;
 
 import org.springframework.ai.tool.ToolCallback;
@@ -454,6 +455,7 @@ public class ErpAssistantService {
         long startTime = System.currentTimeMillis();
         StringBuilder contentBuilder = new StringBuilder();
         AtomicReference<Usage> usageRef = new AtomicReference<>();
+        AtomicReference<Throwable> errorRef = new AtomicReference<>();
 
         // 在 Servlet 线程捕获租户上下文，用于 contextWrite 注入 Reactor Context
         String entCode = TenantContext.getEntCode();
@@ -472,6 +474,7 @@ public class ErpAssistantService {
                     return result != null && result.getOutput() != null ? result.getOutput().getText() : null;
                 })
                 .doOnNext(contentBuilder::append)
+                .doOnError(errorRef::set)
                 .publishOn(Schedulers.boundedElastic())
                 .doFinally(signal -> {
                     // 恢复租户上下文（双保险：contextWrite 自动传播 + 手动设置）
@@ -480,21 +483,30 @@ public class ErpAssistantService {
                     try {
                         int[] tokens = this.extractTokenUsageFromRef(usageRef.get());
                         int durationMs = (int) (System.currentTimeMillis() - startTime);
-                        // 事务 B：保存助手消息
+                        String content = contentBuilder.toString();
+                        boolean cancelled = signal == SignalType.CANCEL;
+                        boolean failed = signal == SignalType.ON_ERROR;
+                        String status = cancelled ? "cancelled" : failed ? "error" : "success";
+                        String errorMessage = failed && errorRef.get() != null
+                                ? errorRef.get().getMessage() : null;
+
+                        // 事务 B：保存助手消息（根据终止原因写入 success / cancelled / error）
                         try {
                             this.chatHistoryService.saveAssistantMessageAndUpdateStats(conversationId,
-                                    contentBuilder.toString(), mode, modelName,
+                                    content, mode, modelName,
                                     tokens[0], tokens[1], tokens[2],
-                                    null, 0, 0, durationMs);
+                                    null, 0, 0, durationMs, status, errorMessage);
                         } catch (Exception e) {
                             log.warn("流式-保存助手消息失败: {}", e.getMessage());
                         }
-                        // 事务 C：计费扣除
-                        try {
-                            this.billingService.deductForTokenUsage(tokens[2], tokens[0], tokens[1],
-                                    modelName, conversationId);
-                        } catch (Exception e) {
-                            log.warn("流式-计费扣除失败: {}", e.getMessage());
+                        // 事务 C：仅在成功或取消时结算一次；异常流不进入扣费
+                        if (!failed) {
+                            try {
+                                this.billingService.deductForTokenUsage(tokens[2], tokens[0], tokens[1],
+                                        modelName, conversationId);
+                            } catch (Exception e) {
+                                log.warn("流式-计费扣除失败: {}", e.getMessage());
+                            }
                         }
                     } finally {
                         TenantContext.clear();

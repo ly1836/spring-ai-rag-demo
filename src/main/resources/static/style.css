@@ -190,6 +190,10 @@ body {
   font-size: 14px; font-family: inherit; resize: none; height: 42px; line-height: 22px;
 }
 .chat-input-row textarea:focus { outline: none; border-color: var(--primary); }
+.chat-input-row textarea.streaming {
+  border-color: var(--warning);
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.12);
+}
 .send-btn {
   width: 42px; height: 42px; border-radius: 10px; border: none;
   background: var(--primary); color: #fff; cursor: pointer; font-size: 18px;
@@ -197,6 +201,17 @@ body {
 }
 .send-btn:hover { background: var(--primary-hover); }
 .send-btn:disabled { opacity: .4; cursor: not-allowed; }
+.stop-btn {
+  min-width: 68px; height: 42px; padding: 0 14px; border-radius: 10px;
+  border: 1px solid #fecaca; background: #fef2f2; color: var(--error);
+  cursor: pointer; font-size: 13px; font-weight: 600;
+}
+.stop-btn:hover { background: #fee2e2; }
+.stop-btn:disabled { opacity: .5; cursor: not-allowed; }
+.stream-stop-note {
+  margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);
+  font-size: 12px; color: var(--warning);
+}
 
 /* 欢迎页 */
 .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; color: var(--text-muted); gap: 10px; padding: 40px; }
@@ -244,6 +259,12 @@ body {
 .history-msg.user { border-left: 3px solid var(--text-muted); }
 .history-msg-header { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 11px; color: var(--text-muted); }
 .history-msg-content { font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.message-status-badge {
+  padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
+  background: var(--bg); color: var(--text-secondary);
+}
+.message-status-badge.cancelled { background: #fffbeb; color: var(--warning); }
+.message-status-badge.error { background: #fef2f2; color: var(--error); }
 
 .role-badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .role-badge.user { background: #f3f4f6; color: var(--text-secondary); }

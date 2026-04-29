@@ -54,8 +54,31 @@ public class GlobalExceptionHandler {
 	/** 兜底处理所有未预期的异常，返回通用错误信息（不暴露内部细节） */
 	@ExceptionHandler(Exception.class)
 	public RespVO<?> handleException(Exception e) {
+		if (isClientDisconnect(e)) {
+			log.debug("客户端已断开连接: {}", e.getMessage());
+			return RespVO.error("CLIENT_DISCONNECTED", "客户端已断开连接", e);
+		}
 		log.error("未处理异常", e);
 		return RespVO.error("SYSTEM_ERROR", "系统内部错误，请稍后重试", e);
+	}
+
+	/** 判断异常是否由客户端主动断开连接触发（例如流式回答被用户停止）。 */
+	private boolean isClientDisconnect(Throwable throwable) {
+		Throwable current = throwable;
+		while (current != null) {
+			String message = current.getMessage();
+			if (message != null) {
+				String normalized = message.toLowerCase();
+				if (normalized.contains("broken pipe")
+						|| normalized.contains("connection reset")
+						|| normalized.contains("clientabort")
+						|| message.contains("你的主机中的软件中止了一个已建立的连接")) {
+					return true;
+				}
+			}
+			current = current.getCause();
+		}
+		return false;
 	}
 
 }

@@ -1,0 +1,80 @@
+schema: spec-driven
+
+context: |
+  # spring-ai-rag-demo — Spring AI 单模块 ERP 智能助手
+
+  单模块 Spring Boot 应用，**无**模块前缀概念。所有架构约束、租户隔离与计费扣费要求详见
+  `openspec/context/spring-ai-rag-demo.md`，AI 在生成 artifact 前必须先读取该文件。
+
+  ## 通用技术栈
+  - Java 17, Spring Boot 3.5.12, Spring AI 1.1.4（BOM 统一管理）
+  - 持久化: Spring JDBC（`JdbcTemplate`），无 JPA / MyBatis
+  - 数据库:
+    - PostgreSQL + pgvector（向量库 `rag_demo`，`@Primary` 数据源，承载 RAG 与 ChatMemory）
+    - MySQL（ERP 业务库 `erp`，承载销售/采购/库存/财务/计费等业务表）
+  - 嵌入模型: 本地 ONNX Runtime 加载 `all-MiniLM-L6-v2`（384 维）
+  - LLM Provider: DeepSeek（`@Primary`）/ OpenAI 兼容协议（DashScope）/ Google Gemini
+  - Web: Spring MVC + WebFlux（仅用于 SSE 流式 `Flux<String>`）
+  - 构建: Maven 单模块（无子 module）
+
+  ## 通用编码约束
+  - 依赖注入: 构造器注入 + `private final`，**禁止** `@Autowired` 字段注入与 `ApplicationContext.getBean()`
+  - 统一响应: `RespVO<T>`（`success=true/false`），SSE 流式接口（`Flux<String>`）除外
+  - 业务异常: 直接抛 `IllegalStateException`（→ `BIZ_ERROR`）/ `IllegalArgumentException`（→ `PARAM_ERROR`），由 `GlobalExceptionHandler` 兜底；**禁止**在 Controller/Service 内自行 try-catch 包装错误码
+  - SQL: 全部通过 `?` 占位 + 参数列表传入，**禁止**字符串拼接动态值
+  - 事务: `@Transactional` 放在 Service 写入方法上；**禁止**在本地事务内调用第三方 LLM 或长耗时操作
+  - Controller 薄: 仅参数绑定 + 调用 Service + 返回 `RespVO`，**禁止**业务逻辑、**禁止**直接执行 SQL
+  - 数据源选择:
+    - VectorStore / ChatMemory 默认走 `@Primary` 的 PgVector
+    - ERP 业务查询统一注入 `@Qualifier("erpJdbcTemplate") JdbcTemplate`
+  - 多租户隔离: 所有 ERP 查询**必须**继承 `tool/BaseTool` 通过 `query()` / `queryWithAlias()` 执行，自动追加 `AND ent_code = ?`；**禁止**直接 `erpJdbcTemplate.queryXxx()` 绕过隔离
+  - 租户上下文: 通过 `TenantContext.requireEntCode()` 读取，异步/响应式链路必须经 `TenantContextAccessor` 透传
+  - ChatModel 路由: 业务代码统一通过 `ModelRegistry.getChatModel(modelId)` 获取，**禁止**直接注入 `deepSeekChatModel` / `openAiChatModel` 等具体 provider Bean
+  - 计费扣费: LLM 调用前 `BillingService.checkQuota()`，调用后 `BillingService.deductTokens()`；新增问答模式必须走相同前后置流程
+  - VO 命名: 业务域内部 record 嵌套在 `XxxVO` 容器类中（如 `ChatVO.AskRequest`、`BillingVO.RechargeResponse`）；跨业务域共享的顶层 VO 才单独建类
+  - OpenSpec 文档语言: `openspec/` 下的 `proposal.md`、`design.md`、`tasks.md`、`spec.md` 正文默认使用中文；如工具或模板要求固定结构关键字（如 `### Requirement:`、`#### Scenario:`、`## Purpose`），可保留这些结构标记，但标题与正文说明应使用中文
+  - 日期格式: 统一 `yyyy-MM-dd HH:mm:ss`
+  - 若无指定代码位置，在 Java 类中新增方法时，始终将新增方法放到类最后面
+  - 新增 Java 类，添加类注释（中文）
+  - 新增 Java 方法，添加方法注释（含义、参数、返回值、可能抛出的错误码）
+  - 新增 Java 业务代码，添加代码注释
+  - 若无指定类、方法、变量命名，优先参考 spec 文档指定的命名方式，再参考新增类、方法、变量同包下的命名方式
+
+  ## 业务域概览
+  单模块下按业务语义划分子包，新增功能落到对应子包（不要堆在根包）：
+  - `chat/` — 智能问答入口（ChatController / ErpAssistantService / DocumentLoaderService / ModelRegistry）
+  - `billing/` — 计费账户、配额校验、token 扣费、充值、用量聚合
+  - `conversation/` — 对话历史、ChatMemory、`JdbcChatMemoryRepository`
+  - `tool/` — ERP `@Tool` 方法集合（继承 `BaseTool`，按业务域拆分文件）
+  - `config/` — 双数据源、租户过滤器、ThreadLocal 上下文、ChatModel `@Primary`、模型属性、全局异常
+  - `vo/` — 跨业务域共享的请求/响应 VO
+
+  ## specs 目录约定
+  - specs 按 capability 扁平存放: `openspec/specs/{spec-id}/spec.md`
+  - spec-id 与 change 名称按业务域命名（如 `chat-stream-mode`、`billing-monthly-quota`、`tool-purchase-order`、`conversation-history-pagination`）；**不**使用模块前缀
+
+  ## 编译
+  - 单模块项目直接 `mvn clean package` / `mvn spring-boot:run` 即可，**不需要** `-am` 参数
+  - 启动前确认 PostgreSQL（pgvector 扩展）和 MySQL（ERP 库）可达，且 `DEEPSEEK_API_KEY` 等环境变量已配置
+
+rules:
+  proposal:
+    - 必须在 proposal 开头注明涉及的业务域（chat / billing / conversation / tool / config / vo）
+    - 生成前必须读取 `openspec/context/spring-ai-rag-demo.md` 获取项目专属约束
+    - 触及租户隔离、计费扣费、ERP SQL、LLM Provider 切换的改动须单独评估风险
+    - proposal 正文默认使用中文；若模板标题为英文结构词，可保留结构词但正文说明使用中文
+  design:
+    - 代码位置须与业务域包结构一致（参考 `openspec/context/spring-ai-rag-demo.md`）
+    - 接口须包含路径、请求/响应结构、错误码（`BIZ_ERROR` / `PARAM_ERROR` / `SYSTEM_ERROR`）、Controller/Service 职责与类名
+    - 涉及 ERP 表的须列出表结构和 `ent_code` 隔离方式；新增 `@Tool` 方法须列出触发关键词与返回字段示例
+    - 涉及 LLM 调用的须说明走 `ModelRegistry` 路由、是否经过 `BillingService` 前后置
+    - design 正文默认使用中文；若模板标题为英文结构词，可保留结构词但正文说明使用中文
+  specs:
+    - `spec.md` 正文默认使用中文
+    - 为兼容 OpenSpec tooling，可保留 `### Requirement:`、`#### Scenario:`、`## ADDED Requirements`、`## MODIFIED Requirements`、`## Purpose`、`## Requirements` 等固定结构关键字
+    - requirement/scenario 的标题文本与描述正文应使用中文，避免生成英文 spec 后再同步到主 specs
+  tasks:
+    - 每个 task 粒度：一层一类改动或一个可独立验证的用例
+    - 实现顺序：表结构/向量元数据 → JdbcTemplate 查询封装（`BaseTool` 子类或 Service） → Service 业务编排 → Controller → 前端联调
+    - 新增 `@Tool` 类先写 `BaseTool` 子类与 SQL，再注册到 `ErpAssistantService` 的 ToolCallback 列表
+    - tasks 正文默认使用中文；若复选框模板编号或结构为英文，不影响正文使用中文

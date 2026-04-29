@@ -23,5 +23,8 @@ logs/
 .env
 
 # Cursor
-.cursor/
+# .cursor/
 agent-tools/
+
+#Mybatis
+.mybatis/
