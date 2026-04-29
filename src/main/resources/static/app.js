@@ -129,6 +129,31 @@ function parseSSEEventData(eventText) {
   return parts.join('');
 }
 
+/** 从错误响应文本中提取可展示错误信息（兼容 RespVO JSON 与纯文本） */
+function extractErrorMessage(text) {
+  if (!text) return '';
+  try {
+    var json = JSON.parse(text);
+    return json.errMsg || json.message || json.errCode || text;
+  } catch (e) {
+    return text;
+  }
+}
+
+/** 如果文本是 RespVO 错误 JSON，则返回 errMsg，否则返回空字符串 */
+function extractRespVOError(text) {
+  if (!text) return '';
+  var trimmed = text.trim();
+  if (!trimmed.startsWith('{')) return '';
+  try {
+    var json = JSON.parse(trimmed);
+    if (json.success === false) {
+      return json.errMsg || json.errCode || '请求失败';
+    }
+  } catch (e) { /* 不是 JSON，忽略 */ }
+  return '';
+}
+
 /**
  * 对容器内所有 <pre><code> 块应用 highlight.js 语法高亮。
  * 仅在流式结束后调用一次，避免频繁 DOM 操作。
@@ -407,11 +432,6 @@ async function sendQuestion() {
   if (!question || isStreaming) return;
 
   const mode = currentMode;
-  // 首次提问时自动生成会话 ID
-  if (!currentConversationId) {
-    currentConversationId = crypto.randomUUID();
-    updateConversationTag();
-  }
 
   input.value = '';
   addMessage('user', question, mode);
@@ -422,13 +442,32 @@ async function sendQuestion() {
   currentStreamController = new AbortController();
 
   try {
-    const params = new URLSearchParams({ question, mode, conversationId: currentConversationId, modelId: currentModelId });
+    const params = new URLSearchParams({ question, mode, modelId: currentModelId });
+    if (currentConversationId) {
+      params.set('conversationId', currentConversationId);
+    }
     // 建立 SSE 连接
     const res = await fetch(API + '/ask/stream?' + params, {
       headers: { ...getHeaders(), 'Accept': 'text/event-stream' },
       signal: currentStreamController.signal
     });
-    if (!res.ok) { const t = await res.text(); throw new Error(res.status + ': ' + t); }
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(extractErrorMessage(t) || (res.status + ': ' + t));
+    }
+    if ((res.headers.get('Content-Type') || '').includes('application/json')) {
+      const t = await res.text();
+      throw new Error(extractErrorMessage(t) || '请求失败');
+    }
+
+    const responseConversationIdHeader = res.headers.get('X-Conversation-Id');
+    const responseConversationId = responseConversationIdHeader
+      ? responseConversationIdHeader.split(',')[0].trim()
+      : '';
+    if (responseConversationId) {
+      currentConversationId = responseConversationId;
+      updateConversationTag();
+    }
 
     removeTypingIndicator();
     const bubble = addMessage('assistant', '', mode);
@@ -452,7 +491,10 @@ async function sendQuestion() {
       while ((idx = sseBuffer.indexOf('\n\n')) !== -1) {
         var eventText = sseBuffer.substring(0, idx);
         sseBuffer = sseBuffer.substring(idx + 2);
-        fullText += parseSSEEventData(eventText);
+        var eventData = parseSSEEventData(eventText);
+        var eventError = extractRespVOError(eventData);
+        if (eventError) throw new Error(eventError);
+        fullText += eventData;
       }
 
       renderAssistantBubble(bubble, fullText, false);
@@ -461,7 +503,10 @@ async function sendQuestion() {
 
     // 处理缓冲区中可能残留的最后一个事件（服务端关闭时可能无尾部 \n\n）
     if (sseBuffer.trim()) {
-      fullText += parseSSEEventData(sseBuffer);
+      var remainingData = parseSSEEventData(sseBuffer);
+      var remainingError = extractRespVOError(remainingData);
+      if (remainingError) throw new Error(remainingError);
+      fullText += remainingData;
     }
 
     renderAssistantBubble(bubble, fullText, false);
@@ -477,7 +522,8 @@ async function sendQuestion() {
       }
       renderAssistantBubble(currentStreamBubble, currentStreamBubble.dataset.rawText || '', true);
     } else {
-      addMessage('assistant', '请求失败: ' + e.message);
+      addMessage('assistant', e.message || '请求失败');
+      showToast(e.message || '请求失败', 'error');
     }
   } finally {
     currentStreamController = null;
@@ -535,6 +581,11 @@ async function loadHints() {
 
 /** 重置聊天面板，开始新对话 */
 function newConversation() {
+  if (isStreaming) {
+    showToast('请先停止当前回答', 'error');
+    return;
+  }
+  var leavingConversation = !!currentConversationId;
   currentConversationId = null;
   updateConversationTag();
   var container = document.getElementById('chatMessages');
@@ -544,6 +595,9 @@ function newConversation() {
     '<p>我可以帮你查询 ERP 业务数据，也可以回答产品知识问题。试试问我：</p>' +
     buildHintsHtml();
   container.appendChild(welcome);
+  if (leavingConversation) {
+    showToast('已退出当前会话');
+  }
 }
 
 // ============================================================
@@ -559,8 +613,13 @@ async function loadConversations() {
     if (!data.data || !data.data.length) {
       container.innerHTML = '<p class="placeholder-text">暂无对话记录</p>'; return;
     }
-    container.innerHTML = data.data.map(c =>
-      '<div class="history-item" onclick="loadMessages(\'' + c.conversationId + '\')">' +
+    container.innerHTML = data.data.map(c => {
+      // 软删除会话：「继续对话」入口置为不可用（服务端列表本就过滤 deleted，此处为防御性兜底）
+      var canContinue = c.status !== 'deleted';
+      var continueBtn = '<button class="btn-icon btn-continue" title="继续对话" ' +
+        (canContinue ? '' : 'disabled aria-disabled="true" ') +
+        'onclick="event.stopPropagation();continueConversation(\'' + c.conversationId + '\')">&#9654;</button>';
+      return '<div class="history-item" onclick="loadMessages(\'' + c.conversationId + '\')">' +
         '<div class="history-item-title">' + escapeHtml(c.title || '无标题') + '</div>' +
         '<div class="history-item-meta">' +
           '<span>' + (c.mode || '-') + '</span>' +
@@ -568,9 +627,10 @@ async function loadConversations() {
           '<span>' + (c.totalTokens || 0) + ' tokens</span>' +
           '<span>' + formatTime(c.updatedAt || c.createdAt) + '</span>' +
         '</div>' +
+        continueBtn +
         '<button class="btn-icon" title="删除" onclick="event.stopPropagation();deleteConversation(\'' + c.conversationId + '\')">&times;</button>' +
-      '</div>'
-    ).join('');
+      '</div>';
+    }).join('');
   } catch (e) { container.innerHTML = '<p style="color:var(--error);">' + e.message + '</p>'; }
 }
 
@@ -605,6 +665,84 @@ async function loadMessages(conversationId) {
       '</div>'
     ).join('');
   } catch (e) { container.innerHTML = '<p style="color:var(--error);">' + e.message + '</p>'; }
+}
+
+/**
+ * 从「历史记录」跳转到「AI 对话」面板续聊指定会话。
+ * <p>
+ * 跳转完成后，{@code currentConversationId} 被替换为该历史会话 ID，后续 {@link sendQuestion}
+ * 发起的提问会通过同一 conversationId 走 {@code GET /api/ask/stream}，由后端 ChatMemory
+ * 自动加载最近 N 条历史作为上下文。续聊默认继承会话最后一条消息的 mode；流式输出进行中时
+ * 拒绝跳转并提示用户先停止当前回答；软删除会话由服务端 {@code ensureConversation} 防御层
+ * 兜底（前端按钮亦置为不可用）。
+ *
+ * @param conversationId 目标会话 ID（来自历史列表）
+ */
+async function continueConversation(conversationId) {
+  // 流式期间禁止覆盖当前会话状态
+  if (isStreaming) {
+    showToast('请先停止当前回答', 'error');
+    return;
+  }
+
+  // 拉取历史消息（自动按租户隔离），失败时仅 toast 不切换 Tab
+  let data;
+  try {
+    data = await apiCall(API + '/conversations/' + conversationId + '/messages');
+  } catch (e) {
+    showToast(e.message, 'error');
+    return;
+  }
+  const messages = (data && data.messages) || [];
+
+  // 切到 AI 对话 Tab
+  switchTab('chat');
+
+  // 替换会话标识，重置聊天容器（清空欢迎页与旧消息）
+  currentConversationId = conversationId;
+  const container = document.getElementById('chatMessages');
+  container.innerHTML = '';
+
+  // 续聊 mode 默认继承最后一条消息的 mode
+  if (messages.length > 0) {
+    const lastMode = messages[messages.length - 1].mode;
+    if (lastMode) {
+      currentMode = lastMode;
+      const targetBtn = document.querySelector('#modeGroup button[data-mode="' + lastMode + '"]');
+      if (targetBtn) {
+        document.querySelectorAll('#modeGroup button').forEach(b => b.classList.remove('active'));
+        targetBtn.classList.add('active');
+      }
+    }
+  }
+
+  // 同步底部会话标签
+  updateConversationTag();
+
+  // 渲染历史气泡：复用现有 addMessage()，确保后续新消息样式一致
+  messages.forEach(function(m) {
+    const role = m.role || 'user';
+    const content = m.content || '';
+    if (role === 'user') {
+      addMessage('user', content, m.mode);
+    } else {
+      const bubble = addMessage('assistant', content, m.mode);
+      // cancelled / error 助手消息追加状态角标，与「历史记录」Tab 表达一致
+      if (m.status === 'cancelled') {
+        bubble.innerHTML += '<div class="stream-stop-note">回答已终止</div>';
+      } else if (m.status === 'error') {
+        const note = m.errorMessage ? '回答失败：' + escapeHtml(m.errorMessage) : '回答失败';
+        bubble.innerHTML += '<div class="stream-error-note">' + note + '</div>';
+      }
+    }
+  });
+
+  // 一次性高亮所有助手消息的代码块
+  highlightCodeBlocks(container);
+
+  // 滚动到底部并把焦点交给输入框，方便立即发送下一条问题
+  container.scrollTop = container.scrollHeight;
+  document.getElementById('questionInput').focus();
 }
 
 /** 删除指定会话（需确认） */

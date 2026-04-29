@@ -324,6 +324,44 @@ public class ChatHistoryService {
 			conversationId, entCode);
 	}
 
+	// ==================== 防御性校验 ====================
+
+	/**
+	 * 校验目标会话是否处于「可继续」状态。
+	 * <p>
+	 * 防御层：当调用方传入一个明确的 {@code conversation_id} 时，必须能在当前租户下查到该会话，
+	 * 且会话不能是 status='deleted'。查不到时抛出「会话不存在，不可继续」；已删除时抛出
+	 * 「会话已删除，不可继续」。两类异常均由 {@link com.example.rag.config.GlobalExceptionHandler}
+	 * 统一返回 {@code BIZ_ERROR}。调用方应在写入用户消息或调用 LLM 之前调用本方法，避免在非法
+	 * 会话上沉淀「幽灵消息」（消息表中存在但会话不可见）。
+	 * <p>
+	 * 新会话场景：调用方未传 {@code conversation_id} 时，Controller 会生成新的 ID，并以
+	 * {@code requireExisting=false} 调用本方法；此时查不到记录属于正常新建路径。
+	 * <p>
+	 * 跨租户访问场景：SELECT 已带 {@code ent_code} 过滤；若调用方传入其他租户的 ID，会按
+	 * 「会话不存在，不可继续」拒绝，不会泄漏其他租户数据。
+	 *
+	 * @param conversationId 待校验的会话 ID
+	 * @param requireExisting 是否要求目标会话必须已存在；续聊为 true，新建为 false
+	 * @throws IllegalStateException 会话不存在或已删除时抛出（错误码 {@code BIZ_ERROR}）
+	 */
+	public void requireConversationActive(String conversationId, boolean requireExisting) {
+		String entCode = TenantContext.requireEntCode();
+		List<String> existingStatus = erp.queryForList(
+			"SELECT status FROM a_chat_conversation " +
+			"WHERE conversation_id = ? AND ent_code = ?",
+			String.class, conversationId, entCode);
+		if (existingStatus.isEmpty()) {
+			if (requireExisting) {
+				throw new IllegalStateException("会话不存在，不可继续");
+			}
+			return;
+		}
+		if ("deleted".equals(existingStatus.get(0))) {
+			throw new IllegalStateException("会话已删除，不可继续");
+		}
+	}
+
 	// ==================== 私有方法 ====================
 
 	/**

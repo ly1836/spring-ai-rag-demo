@@ -88,7 +88,19 @@ Archive a completed change in the experimental workflow.
    mv openspec/changes/<name> openspec/changes/archive/YYYY-MM-DD-<name>
    ```
 
-6. **Display summary**
+6. **Normalize generated main specs (required when delta specs exist)**
+
+   If the archive operation created or updated `openspec/specs/<capability>/spec.md`, you MUST read the resulting main spec file(s) and check for tool-generated English shell content such as:
+   - `# <capability> Specification`
+   - `TBD - created by archiving change ...`
+   - `Update Purpose after archive.`
+
+   If found, immediately rewrite them to match project language rules before reporting success:
+   - Keep OpenSpec structural keywords like `## Purpose`, `## Requirements`
+   - Convert the title to Chinese (for example `# <capability> 规格`)
+   - Replace placeholder `Purpose` text with a concise formal Chinese description derived from the archived delta spec
+
+7. **Display summary**
 
    Show archive completion summary including:
    - Change name

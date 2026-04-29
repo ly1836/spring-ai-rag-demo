@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ERP 智能助手</title>
-  <link rel="stylesheet" href="style.css?v=8">
+  <link rel="stylesheet" href="style.css?v=10">
   <link rel="stylesheet" href="vendor/highlight-github.min.css?v=1">
 </head>
 <body>
@@ -86,6 +86,7 @@
             <select id="modelSelect" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--surface);color:var(--text);">
               <option value="">加载中...</option>
             </select>
+            <button class="btn btn-outline btn-sm chat-new-btn" onclick="newConversation()">新建对话</button>
             <span class="conversation-tag" id="conversationTag" style="display:none"></span>
           </div>
           <div class="chat-input-row">
@@ -153,6 +154,6 @@
 
   <script src="vendor/marked.min.js?v=1"></script>
   <script src="vendor/highlight.min.js?v=1"></script>
-  <script src="app.js?v=10"></script>
+  <script src="app.js?v=15"></script>
 </body>
 </html>

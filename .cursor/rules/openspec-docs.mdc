@@ -10,3 +10,6 @@ alwaysApply: false
 - OpenSpec 工具可能依赖固定结构关键字；如模板或同步工具要求保留 `## ADDED Requirements`、`### Requirement:`、`#### Scenario:`、`## Purpose`、`## Requirements` 等结构标记时，可以保留这些英文结构词，但其后的标题、说明、场景内容应使用中文。
 - 若主 `spec` 由 change 下的 delta spec 同步而来，源 delta spec 也应优先写成中文，否则同步结果会延续源文档语言。
 - 编写 `spec.md` 时优先保证结构兼容性，其次保证语言一致性；不要为了翻译把 OpenSpec 所需层级或关键标记改坏。
+- 主 `spec` 的标题也应优先使用中文，例如 `# <capability> 规格`，不要保留 CLI 自动生成的 `# <capability> Specification` 英文标题。
+- `## Purpose` 段落必须写成正式中文说明，禁止保留 `TBD - created by archiving change ...`、`Update Purpose after archive.` 等英文占位文案。
+- 当归档或同步主 spec 时，如果工具自动生成了英文外壳，必须在归档流程结束前立即改写为中文，再视为完成。

@@ -141,10 +141,10 @@ public class ErpAssistantService {
     // ==================== 自动模式（Tool Calling + RAG） ====================
 
     /** 自动模式问答（非流式）：LLM 同时拥有 Tool Calling 和 RAG 能力，自行判断调用哪个 */
-    public String ask(String question, String conversationId, String modelId) {
+    public String ask(String question, String conversationId, String modelId, boolean requireExistingConversation) {
         String mode = "auto";
         String modelName = this.resolveModelName(modelId);
-        this.prepareConversation(conversationId, question, mode);
+        this.prepareConversation(conversationId, question, mode, requireExistingConversation);
 
         long startTime = System.currentTimeMillis();
         // 挂载会话记忆 + RAG 检索两个 Advisor
@@ -162,10 +162,10 @@ public class ErpAssistantService {
     }
 
     /** 自动模式问答（流式 SSE）：功能同 ask()，以逐 chunk 方式返回 */
-    public Flux<String> askStream(String question, String conversationId, String modelId) {
+    public Flux<String> askStream(String question, String conversationId, String modelId, boolean requireExistingConversation) {
         String mode = "auto";
         String modelName = this.resolveModelName(modelId);
-        this.prepareConversation(conversationId, question, mode);
+        this.prepareConversation(conversationId, question, mode, requireExistingConversation);
 
         return this.streamWithRecording(
                 this.resolveClient(modelId).prompt()
@@ -182,10 +182,10 @@ public class ErpAssistantService {
     // ==================== 纯数据模式（仅 Tool Calling） ====================
 
     /** 数据模式问答（非流式）：仅通过 Tool Calling 查询 ERP 数据库，不检索产品手册 */
-    public String askData(String question, String conversationId, String modelId) {
+    public String askData(String question, String conversationId, String modelId, boolean requireExistingConversation) {
         String mode = "data";
         String modelName = this.resolveModelName(modelId);
-        this.prepareConversation(conversationId, question, mode);
+        this.prepareConversation(conversationId, question, mode, requireExistingConversation);
 
         long startTime = System.currentTimeMillis();
         // 仅挂载会话记忆 Advisor，不挂载 RAG Advisor
@@ -200,10 +200,10 @@ public class ErpAssistantService {
     }
 
     /** 数据模式问答（流式 SSE） */
-    public Flux<String> askDataStream(String question, String conversationId, String modelId) {
+    public Flux<String> askDataStream(String question, String conversationId, String modelId, boolean requireExistingConversation) {
         String mode = "data";
         String modelName = this.resolveModelName(modelId);
-        this.prepareConversation(conversationId, question, mode);
+        this.prepareConversation(conversationId, question, mode, requireExistingConversation);
 
         return this.streamWithRecording(
                 this.resolveClient(modelId).prompt()
@@ -217,10 +217,10 @@ public class ErpAssistantService {
     // ==================== 纯知识模式（仅 RAG） ====================
 
     /** 知识模式问答（非流式）：仅检索产品手册，禁用 Tool Calling */
-    public String askKnowledge(String question, String conversationId, String modelId) {
+    public String askKnowledge(String question, String conversationId, String modelId, boolean requireExistingConversation) {
         String mode = "knowledge";
         String modelName = this.resolveModelName(modelId);
-        this.prepareConversation(conversationId, question, mode);
+        this.prepareConversation(conversationId, question, mode, requireExistingConversation);
 
         // 通过 mutate() 创建不带 tools 的 ChatClient 副本，禁止 LLM 调用工具
         var noToolsClient = this.resolveClient(modelId).mutate()
@@ -242,10 +242,10 @@ public class ErpAssistantService {
     }
 
     /** 知识模式问答（流式 SSE） */
-    public Flux<String> askKnowledgeStream(String question, String conversationId, String modelId) {
+    public Flux<String> askKnowledgeStream(String question, String conversationId, String modelId, boolean requireExistingConversation) {
         String mode = "knowledge";
         String modelName = this.resolveModelName(modelId);
-        this.prepareConversation(conversationId, question, mode);
+        this.prepareConversation(conversationId, question, mode, requireExistingConversation);
 
         var noToolsClient = this.resolveClient(modelId).mutate()
                 .defaultToolCallbacks(new ToolCallback[0])
@@ -405,12 +405,31 @@ public class ErpAssistantService {
 
     /**
      * LLM 调用前的准备工作：
-     * 1. 确保会话记录存在 + 保存用户消息（事务 A）
-     * 2. 校验计费配额，不满足则抛出 IllegalStateException 阻止 LLM 调用
+     * 1. 防御层：校验会话未被软删除，若已删除直接抛 {@link IllegalStateException} 阻断后续动作
+     * 2. 确保会话记录存在 + 保存用户消息（事务 A）
+     * 3. 校验计费配额，不满足则抛出 {@link IllegalStateException} 阻止 LLM 调用
+     * <p>
+     * 异常分类处理：
+     * <ul>
+     *   <li>{@link IllegalStateException} —— 业务级拒绝（如续写软删除会话、配额不足等），
+     *       必须向上传播，由 {@code GlobalExceptionHandler} 统一返回 {@code BIZ_ERROR}，
+     *       同时阻止后续的配额检查与 LLM 调用，避免「幽灵消息」与无依据扣费</li>
+     *   <li>其他持久化抖动（{@link org.springframework.dao.DataAccessException} 等） —— 仅
+     *       记录 warn 后继续走 LLM 流程，与本变更前行为一致</li>
+     * </ul>
+     * <p>
+     * 防御性校验放在 try-catch 之外：必须在写入任何用户消息之前完成，且任何业务异常
+     * 都不能被下方的兜底 catch 吞掉。
      */
-    private void prepareConversation(String conversationId, String question, String mode) {
+    private void prepareConversation(String conversationId, String question, String mode,
+                                     boolean requireExistingConversation) {
+        // 防御层（try-catch 之外）：拒绝乱传/已软删除会话，避免写入幽灵消息
+        this.chatHistoryService.requireConversationActive(conversationId, requireExistingConversation);
         try {
             this.chatHistoryService.initConversationAndSaveUserMessage(conversationId, question, mode);
+        } catch (IllegalStateException e) {
+            // 业务级拒绝信号：必须传播，不能吞掉
+            throw e;
         } catch (Exception e) {
             log.warn("保存用户消息失败: {}", e.getMessage());
         }

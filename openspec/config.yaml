@@ -70,9 +70,12 @@ rules:
     - 涉及 LLM 调用的须说明走 `ModelRegistry` 路由、是否经过 `BillingService` 前后置
     - design 正文默认使用中文；若模板标题为英文结构词，可保留结构词但正文说明使用中文
   specs:
-    - `spec.md` 正文默认使用中文
+    - "`spec.md` 正文默认使用中文"
     - 为兼容 OpenSpec tooling，可保留 `### Requirement:`、`#### Scenario:`、`## ADDED Requirements`、`## MODIFIED Requirements`、`## Purpose`、`## Requirements` 等固定结构关键字
     - requirement/scenario 的标题文本与描述正文应使用中文，避免生成英文 spec 后再同步到主 specs
+    - 主 spec 标题应优先使用中文（如 `# <capability> 规格`），禁止保留 CLI 自动生成的 `Specification` 英文标题
+    - `## Purpose` 段落必须写成正式中文说明，禁止保留 `TBD - created by archiving change ...`、`Update Purpose after archive.` 等英文占位文案
+    - 归档或同步主 spec 后，如工具生成了英文外壳，必须在流程结束前立即修正为中文
   tasks:
     - 每个 task 粒度：一层一类改动或一个可独立验证的用例
     - 实现顺序：表结构/向量元数据 → JdbcTemplate 查询封装（`BaseTool` 子类或 Service） → Service 业务编排 → Controller → 前端联调

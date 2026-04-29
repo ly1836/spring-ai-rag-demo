@@ -4,10 +4,12 @@ import com.example.rag.config.ModelProperties;
 import com.example.rag.vo.ChatVO;
 import com.example.rag.vo.RespVO;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import reactor.core.publisher.Flux;
 
+import jakarta.servlet.http.HttpServletResponse;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -73,30 +75,43 @@ public class ChatController {
      */
     @GetMapping("/ask")
     public RespVO<ChatVO.AskResponse> ask(ChatVO.AskRequest request) {
-        String cid = request.conversationId().isBlank()
-                ? UUID.randomUUID().toString() : request.conversationId();
+        boolean hasConversationId = !request.conversationId().isBlank();
+        String cid = hasConversationId ? request.conversationId() : UUID.randomUUID().toString();
         String mid = request.modelId();
 
         String answer = switch (request.mode()) {
-            case "data" -> assistantService.askData(request.question(), cid, mid);
-            case "knowledge" -> assistantService.askKnowledge(request.question(), cid, mid);
-            default -> assistantService.ask(request.question(), cid, mid);
+            case "data" -> assistantService.askData(request.question(), cid, mid, hasConversationId);
+            case "knowledge" -> assistantService.askKnowledge(request.question(), cid, mid, hasConversationId);
+            default -> assistantService.ask(request.question(), cid, mid, hasConversationId);
         };
 
         return RespVO.success(new ChatVO.AskResponse(cid, request.question(), answer, request.mode()));
     }
 
-    @GetMapping(value = "/ask/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> askStream(ChatVO.AskRequest request) {
-        String cid = request.conversationId().isBlank()
-                ? UUID.randomUUID().toString() : request.conversationId();
+    @GetMapping(value = "/ask/stream", produces = {MediaType.TEXT_EVENT_STREAM_VALUE, MediaType.APPLICATION_JSON_VALUE})
+    public ResponseEntity<?> askStream(ChatVO.AskRequest request, HttpServletResponse response) {
+        boolean hasConversationId = !request.conversationId().isBlank();
+        String cid = hasConversationId ? request.conversationId() : UUID.randomUUID().toString();
         String mid = request.modelId();
-
-        return switch (request.mode()) {
-            case "data" -> assistantService.askDataStream(request.question(), cid, mid);
-            case "knowledge" -> assistantService.askKnowledgeStream(request.question(), cid, mid);
-            default -> assistantService.askStream(request.question(), cid, mid);
-        };
+        try {
+            Flux<String> body = switch (request.mode()) {
+                case "data" -> assistantService.askDataStream(request.question(), cid, mid, hasConversationId);
+                case "knowledge" -> assistantService.askKnowledgeStream(request.question(), cid, mid, hasConversationId);
+                default -> assistantService.askStream(request.question(), cid, mid, hasConversationId);
+            };
+            return ResponseEntity.ok()
+                    .header("X-Conversation-Id", cid)
+                    .contentType(MediaType.TEXT_EVENT_STREAM)
+                    .body(body);
+        } catch (IllegalStateException e) {
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(RespVO.error("BIZ_ERROR", e.getMessage(), e));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(RespVO.error("PARAM_ERROR", e.getMessage(), e));
+        }
     }
 
     // ==================== 可用模型列表 ====================

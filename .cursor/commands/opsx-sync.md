@@ -63,8 +63,18 @@ This is an **agent-driven** operation - you will read delta specs and directly e
 
    d. **Create new main spec** if capability doesn't exist yet:
       - Create `openspec/specs/<capability>/spec.md`
-      - Add Purpose section (can be brief, mark as TBD)
+      - Add `## Purpose` section with a concise formal Chinese description
       - Add Requirements section with the ADDED requirements
+
+   e. **Normalize generated main spec shell**
+      - If the resulting main spec contains tool-generated English shell content, rewrite it before finishing
+      - Must fix cases like:
+        - `# <capability> Specification`
+        - `TBD - created by archiving change ...`
+        - `Update Purpose after archive.`
+      - Keep OpenSpec-required structure keywords such as `## Purpose`, `## Requirements`
+      - Convert the title to Chinese, e.g. `# <capability> 规格`
+      - Ensure `## Purpose` is formal Chinese, not placeholder text
 
 4. **Show summary**
 

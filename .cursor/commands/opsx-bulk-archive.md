@@ -121,6 +121,11 @@ This skill allows you to batch-archive changes, handling spec conflicts intellig
       - For conflicts, apply in resolved order
       - Track if sync was done
 
+      After each sync, normalize any generated main spec shell content before proceeding:
+      - Fix `# <capability> Specification` → Chinese title such as `# <capability> 规格`
+      - Replace `TBD - created by archiving change ...` / `Update Purpose after archive.` with formal Chinese `## Purpose`
+      - Preserve OpenSpec-required structure keywords like `## Purpose`, `## Requirements`
+
    b. **Perform the archive**:
       ```bash
       mkdir -p openspec/changes/archive

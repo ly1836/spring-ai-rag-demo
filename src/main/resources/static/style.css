@@ -178,7 +178,8 @@ body {
 .chat-options { display: flex; gap: 10px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
 .chat-options label { font-size: 12px; color: var(--text-secondary); }
 .chat-options select, .chat-options input { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
-.conversation-tag { font-size: 11px; color: var(--primary); background: var(--primary-light); padding: 3px 8px; border-radius: 10px; margin-left: auto; }
+.chat-new-btn { margin-left: auto; }
+.conversation-tag { font-size: 11px; color: var(--primary); background: var(--primary-light); padding: 3px 8px; border-radius: 10px; }
 
 .toggle-group { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
 .toggle-group button { padding: 4px 12px; border: none; background: transparent; font-size: 12px; cursor: pointer; color: var(--text-secondary); transition: all .15s; }
@@ -211,6 +212,10 @@ body {
 .stream-stop-note {
   margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);
   font-size: 12px; color: var(--warning);
+}
+.stream-error-note {
+  margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);
+  font-size: 12px; color: var(--error);
 }
 
 /* 欢迎页 */
@@ -245,13 +250,23 @@ body {
 
 .history-list { flex: 1; overflow-y: auto; padding: 8px; }
 .history-item {
-  position: relative; padding: 12px 36px 12px 14px; border-radius: 8px;
+  position: relative; padding: 12px 60px 12px 14px; border-radius: 8px;
   cursor: pointer; transition: background .15s; margin-bottom: 4px;
 }
 .history-item:hover { background: var(--bg); }
 .history-item.selected { background: var(--primary-light); border-left: 3px solid var(--primary); }
 .history-item-title { font-size: 13px; font-weight: 500; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .history-item-meta { display: flex; gap: 10px; font-size: 11px; color: var(--text-muted); }
+
+/* 历史列表 - 继续对话按钮（与右上角的删除按钮并列） */
+.btn-icon.btn-continue {
+  right: 32px; font-size: 14px; color: var(--primary);
+}
+.btn-icon.btn-continue:hover { color: var(--primary-hover); background: var(--primary-light); border-radius: 4px; }
+.btn-icon.btn-continue:disabled,
+.btn-icon.btn-continue[aria-disabled="true"] {
+  opacity: .35; cursor: not-allowed; color: var(--text-muted); background: none;
+}
 
 .history-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .history-msg { background: var(--bg); border-radius: 8px; padding: 12px; }
