@@ -1,4 +1,12 @@
 app:
+  tenant:
+    # ERP 多租户列名；MyBatis-Plus 租户插件会自动给租户隔离表追加该列条件
+    column: ent_code
+    # 全局配置表没有 ent_code 字段，必须跳过租户条件注入
+    ignore-tables:
+      - a_billing_plan
+      - a_billing_price_rule
+
   # 可用模型列表，前端从 /api/models 接口获取并展示在下拉框中
   # provider 对应 Spring AI 的 ChatModel bean 名称（deepseek / openai 等）
   # model-name 为实际传给 API 的模型标识符
@@ -56,11 +64,11 @@ spring:
 
     # 使用 ONNX Runtime 在本地运行 sentence-transformers 嵌入模型，无需调用远程 API
     # 模型 all-MiniLM-L6-v2：轻量级文本嵌入模型，输出 384 维向量，适合语义搜索/RAG 场景
-    transformers:
-      embedding:
-        model:
+    embedding:
+      transformer:
+        onnx:
           # ONNX 模型文件，已预下载到项目 resources/models/embedding/ 目录，启动时直接加载无需联网
-          uri: classpath:models/embedding/model.onnx
+          model-uri: classpath:models/embedding/model.onnx
         tokenizer:
           # 对应的分词器配置，用于将输入文本拆分为模型可处理的 token
           uri: classpath:models/embedding/tokenizer.json
