@@ -11,21 +11,16 @@ Implement tasks from an OpenSpec change.
 
 **Steps**
 
-0. **模块识别与 context 加载（必须首先执行）**
+0. **项目 context 加载（必须首先执行）**
 
-   本项目是 monorepo，OpenSpec 统一在根目录管理。change 名称以模块前缀开头（im-xxx / wallet-xxx / system-xxx）。
+   本项目是单模块 Spring Boot 应用，OpenSpec 统一在仓库根目录管理，change 名称不使用模块前缀。
    **所有 CLI 命令在项目根目录执行。**
 
-   **识别目标模块**（按优先级）：
-   a. 从 change 名称前缀直接判断（如 `im-add-announcement` → im）
-   b. 用户明确指定了模块 → 直接使用
-   c. 从业务语义推断（如「支付回调」→ wallet，「群聊」→ im）
-   d. 执行 `openspec list --json` 查看可用 changes，从名称前缀判断
-   e. 无法判断 → 使用 **AskUserQuestion tool** 询问
+   实现前必须读取：
+   - `openspec/context/spring-ai-rag-demo.md`
+   - `openspec/config.yaml`
 
-   确定后：
-   - **读取** `openspec/context/{module}.md` 获取模块专属架构约束
-   - 实现代码时以模块 context 中的分层和命名规范为准
+   实现代码时以项目 context 中的业务域包结构、租户隔离、计费扣费、前端规范为准。
 
 1. **Select the change**
 

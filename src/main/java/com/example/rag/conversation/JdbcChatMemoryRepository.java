@@ -3,13 +3,14 @@ package com.example.rag.conversation;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+
+import com.example.rag.dao.mapper.ChatMessageMapper;
 
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -31,29 +32,26 @@ public class JdbcChatMemoryRepository implements ChatMemoryRepository {
 
 	private static final int MAX_HISTORY = 20;
 
-	private final JdbcTemplate erp;
+	/** 对话消息 Mapper。 */
+	private final ChatMessageMapper messageMapper;
 
-	public JdbcChatMemoryRepository(@Qualifier("erpJdbcTemplate") JdbcTemplate erpJdbcTemplate) {
-		this.erp = erpJdbcTemplate;
+	public JdbcChatMemoryRepository(ChatMessageMapper messageMapper) {
+		this.messageMapper = messageMapper;
 	}
 
 	@Override
 	public List<Message> findByConversationId(String conversationId) {
-		List<Message> messages = new ArrayList<>(erp.query(
-			"SELECT role, content FROM (" +
-				"SELECT role, content, created_at FROM a_chat_message " +
-				"WHERE conversation_id = ? AND content IS NOT NULL AND status = 'success' " +
-				"ORDER BY created_at DESC LIMIT ?" +
-			") t ORDER BY created_at ASC",
-			(rs, rowNum) -> {
-				String role = rs.getString("role");
-				String content = rs.getString("content");
-				if ("user".equals(role)) {
-					return (Message) new UserMessage(content);
-				}
-				return (Message) new AssistantMessage(content);
-			},
-			conversationId, MAX_HISTORY));
+		List<Message> messages = new ArrayList<>();
+		for (Map<String, Object> row : messageMapper.selectRecentMessages(conversationId, MAX_HISTORY)) {
+			String role = (String) row.get("role");
+			String content = (String) row.get("content");
+			if ("user".equals(role)) {
+				messages.add(new UserMessage(content));
+			}
+			else {
+				messages.add(new AssistantMessage(content));
+			}
+		}
 
 		// prepareConversation() 在 Advisor 之前已将当前 user 消息写入 DB，
 		// Advisor 会将当前提问作为 prompt 指令单独发送，这里需要剔除以避免重复。

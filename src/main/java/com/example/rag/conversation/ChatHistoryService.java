@@ -3,14 +3,17 @@ package com.example.rag.conversation;
 import java.util.List;
 import java.util.UUID;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.rag.config.TenantContext;
+import com.example.rag.dao.entity.ChatConversationEntity;
+import com.example.rag.dao.entity.ChatMessageEntity;
+import com.example.rag.dao.mapper.ChatConversationMapper;
+import com.example.rag.dao.mapper.ChatMessageMapper;
 import com.example.rag.vo.ConversationVO;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,10 +38,15 @@ public class ChatHistoryService {
 
 	private static final Logger log = LoggerFactory.getLogger(ChatHistoryService.class);
 
-	private final JdbcTemplate erp;
+	/** 对话会话 Mapper。 */
+	private final ChatConversationMapper conversationMapper;
 
-	public ChatHistoryService(@Qualifier("erpJdbcTemplate") JdbcTemplate erpJdbcTemplate) {
-		this.erp = erpJdbcTemplate;
+	/** 对话消息 Mapper。 */
+	private final ChatMessageMapper messageMapper;
+
+	public ChatHistoryService(ChatConversationMapper conversationMapper, ChatMessageMapper messageMapper) {
+		this.conversationMapper = conversationMapper;
+		this.messageMapper = messageMapper;
 	}
 
 	// ==================== 事务化组合方法 ====================
@@ -57,7 +65,7 @@ public class ChatHistoryService {
 	 * @param mode           问答模式
 	 * @return 用户消息 ID（UUID）
 	 */
-	@Transactional
+	@Transactional(transactionManager = "erpTransactionManager")
 	public String initConversationAndSaveUserMessage(String conversationId, String question, String mode) {
 		ensureConversation(conversationId, question, mode);
 		return saveUserMessage(conversationId, question, mode);
@@ -85,7 +93,7 @@ public class ChatHistoryService {
 	 * @param durationMs       响应耗时（毫秒）
 	 * @return 助手消息 ID（UUID）
 	 */
-	@Transactional
+	@Transactional(transactionManager = "erpTransactionManager")
 	public String saveAssistantMessageAndUpdateStats(String conversationId, String content, String mode,
 			String model, int promptTokens, int completionTokens, int totalTokens,
 			String toolCalls, int toolCallsCount, int ragDocCount, Integer durationMs) {
@@ -112,7 +120,7 @@ public class ChatHistoryService {
 	 * @param errorMessage     错误信息（仅失败时返回）
 	 * @return 助手消息 ID（UUID）
 	 */
-	@Transactional
+	@Transactional(transactionManager = "erpTransactionManager")
 	public String saveAssistantMessageAndUpdateStats(String conversationId, String content, String mode,
 			String model, int promptTokens, int completionTokens, int totalTokens,
 			String toolCalls, int toolCallsCount, int ragDocCount, Integer durationMs,
@@ -144,10 +152,7 @@ public class ChatHistoryService {
 		String entCode = TenantContext.requireEntCode();
 		String userId = TenantContext.getUserIdOrDefault();
 		String truncatedTitle = title.length() > 100 ? title.substring(0, 100) + "..." : title;
-		erp.update(
-			"INSERT IGNORE INTO a_chat_conversation " +
-			"(conversation_id, ent_code, user_id, title, mode) VALUES (?, ?, ?, ?, ?)",
-			conversationId, entCode, userId, truncatedTitle, mode);
+		conversationMapper.insertIgnore(conversationId, entCode, userId, truncatedTitle, mode);
 	}
 
 	/**
@@ -237,13 +242,7 @@ public class ChatHistoryService {
 	 * @param conversationId 会话 ID
 	 */
 	public void updateConversationStats(String conversationId) {
-		erp.update(
-			"UPDATE a_chat_conversation SET " +
-			"message_count = (SELECT COUNT(*) FROM a_chat_message WHERE conversation_id = ?), " +
-			"total_tokens = (SELECT COALESCE(SUM(total_tokens), 0) FROM a_chat_message WHERE conversation_id = ?), " +
-			"updated_at = NOW() " +
-			"WHERE conversation_id = ?",
-			conversationId, conversationId, conversationId);
+		conversationMapper.updateStats(conversationId);
 	}
 
 	// ==================== 查询方法 ====================
@@ -257,23 +256,8 @@ public class ChatHistoryService {
 	 * @return 会话摘要列表
 	 */
 	public List<ConversationVO.ConversationItemResponse> getConversations(int page, int size) {
-		String entCode = TenantContext.requireEntCode();
 		String userId = TenantContext.getUserIdOrDefault();
-		return erp.query(
-			"SELECT conversation_id, title, mode, message_count, total_tokens, status, created_at, updated_at " +
-			"FROM a_chat_conversation " +
-			"WHERE ent_code = ? AND user_id = ? AND status != 'deleted' " +
-			"ORDER BY updated_at DESC LIMIT ? OFFSET ?",
-			(rs, rowNum) -> new ConversationVO.ConversationItemResponse(
-				rs.getString("conversation_id"),
-				rs.getString("title"),
-				rs.getString("mode"),
-				rs.getInt("message_count"),
-				rs.getInt("total_tokens"),
-				rs.getString("status"),
-				rs.getString("created_at"),
-				rs.getString("updated_at")),
-			entCode, userId, size, page * size);
+		return conversationMapper.selectConversationItems(userId, size, page * size);
 	}
 
 	/**
@@ -284,31 +268,8 @@ public class ChatHistoryService {
 	 * @return 消息详情列表
 	 */
 	public List<ConversationVO.ChatMessageItemResponse> getMessages(String conversationId) {
-		String entCode = TenantContext.requireEntCode();
-		return erp.query(
-			"SELECT message_id, role, content, mode, model, " +
-			"prompt_tokens, completion_tokens, total_tokens, " +
-			"tool_calls, tool_calls_count, rag_doc_count, duration_ms, status, error_message, created_at " +
-			"FROM a_chat_message " +
-			"WHERE conversation_id = ? AND ent_code = ? " +
-			"ORDER BY created_at ASC",
-			(rs, rowNum) -> new ConversationVO.ChatMessageItemResponse(
-				rs.getString("message_id"),
-				rs.getString("role"),
-				rs.getString("content"),
-				rs.getString("mode"),
-				rs.getString("model"),
-				rs.getInt("prompt_tokens"),
-				rs.getInt("completion_tokens"),
-				rs.getInt("total_tokens"),
-				rs.getString("tool_calls"),
-				rs.getInt("tool_calls_count"),
-				rs.getInt("rag_doc_count"),
-				rs.getObject("duration_ms", Integer.class),
-				rs.getString("status"),
-				rs.getString("error_message"),
-				rs.getString("created_at")),
-			conversationId, entCode);
+		TenantContext.requireEntCode();
+		return messageMapper.selectMessageItems(conversationId);
 	}
 
 	/**
@@ -317,11 +278,11 @@ public class ChatHistoryService {
 	 * @param conversationId 会话 ID
 	 */
 	public void archiveConversation(String conversationId) {
-		String entCode = TenantContext.requireEntCode();
-		erp.update(
-			"UPDATE a_chat_conversation SET status = 'deleted', updated_at = NOW() " +
-			"WHERE conversation_id = ? AND ent_code = ?",
-			conversationId, entCode);
+		TenantContext.requireEntCode();
+		ChatConversationEntity entity = new ChatConversationEntity();
+		entity.setStatus("deleted");
+		conversationMapper.update(entity, new LambdaUpdateWrapper<ChatConversationEntity>()
+			.eq(ChatConversationEntity::getConversationId, conversationId));
 	}
 
 	// ==================== 防御性校验 ====================
@@ -346,11 +307,8 @@ public class ChatHistoryService {
 	 * @throws IllegalStateException 会话不存在或已删除时抛出（错误码 {@code BIZ_ERROR}）
 	 */
 	public void requireConversationActive(String conversationId, boolean requireExisting) {
-		String entCode = TenantContext.requireEntCode();
-		List<String> existingStatus = erp.queryForList(
-			"SELECT status FROM a_chat_conversation " +
-			"WHERE conversation_id = ? AND ent_code = ?",
-			String.class, conversationId, entCode);
+		TenantContext.requireEntCode();
+		List<String> existingStatus = conversationMapper.selectStatus(conversationId);
 		if (existingStatus.isEmpty()) {
 			if (requireExisting) {
 				throw new IllegalStateException("会话不存在，不可继续");
@@ -375,15 +333,25 @@ public class ChatHistoryService {
 		String messageId = UUID.randomUUID().toString();
 		String entCode = TenantContext.requireEntCode();
 		String userId = TenantContext.getUserIdOrDefault();
-		erp.update(
-			"INSERT INTO a_chat_message " +
-			"(message_id, conversation_id, ent_code, user_id, role, content, mode, model, " +
-			"prompt_tokens, completion_tokens, total_tokens, " +
-			"tool_calls, tool_calls_count, rag_doc_count, duration_ms, status, error_message) " +
-			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			messageId, conversationId, entCode, userId, role, content, mode, model,
-			promptTokens, completionTokens, totalTokens,
-			toolCalls, toolCallsCount, ragDocCount, durationMs, status, errorMessage);
+		ChatMessageEntity entity = new ChatMessageEntity();
+		entity.setMessageId(messageId);
+		entity.setConversationId(conversationId);
+		entity.setEntCode(entCode);
+		entity.setUserId(userId);
+		entity.setRole(role);
+		entity.setContent(content);
+		entity.setMode(mode);
+		entity.setModel(model);
+		entity.setPromptTokens(promptTokens);
+		entity.setCompletionTokens(completionTokens);
+		entity.setTotalTokens(totalTokens);
+		entity.setToolCalls(toolCalls);
+		entity.setToolCallsCount(toolCallsCount);
+		entity.setRagDocCount(ragDocCount);
+		entity.setDurationMs(durationMs);
+		entity.setStatus(status);
+		entity.setErrorMessage(errorMessage);
+		messageMapper.insert(entity);
 		return messageId;
 	}
 

@@ -15,11 +15,11 @@ Archive a completed change in the experimental workflow.
 
 **Steps**
 
-0. **模块识别（必须首先执行）**
+0. **项目确认（必须首先执行）**
 
-   本项目是 monorepo，OpenSpec 统一在根目录管理。change 名称以模块前缀开头（im-xxx / wallet-xxx / system-xxx）。
+   本项目是单模块 Spring Boot 应用，OpenSpec 统一在仓库根目录管理，change 名称不使用模块前缀。
    **所有 CLI 命令在项目根目录执行。**
-   从 change 名称前缀即可判断所属模块。如需列出 changes，直接在根目录执行 `openspec list --json`。
+   如需列出 changes，直接在根目录执行 `openspec list --json`。
 
 1. **If no change name provided, prompt for selection**
 

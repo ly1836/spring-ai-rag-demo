@@ -17,16 +17,16 @@ Enter explore mode. Think deeply. Visualize freely. Follow the conversation wher
 
 ---
 
-## Monorepo 模块识别
+## 项目 context 识别
 
-本项目是 monorepo，OpenSpec 统一在根目录管理。所有 CLI 命令在根目录执行。
-change 名称以模块前缀开头：im-xxx / wallet-xxx / system-xxx。
+本项目是单模块 Spring Boot 应用，OpenSpec 统一在仓库根目录管理。所有 CLI 命令在根目录执行。
+change 名称按业务域或能力命名（如 `chat-stream-mode`、`billing-monthly-quota`、`data-access-mybatis-plus-crud`），不使用模块前缀。
 
-当话题涉及特定模块时：
-- 读取 `openspec/context/{module}.md` 获取模块专属架构约束
-- 模块 context 文件：`openspec/context/im.md`、`openspec/context/wallet.md`、`openspec/context/system.md`
+当话题涉及代码、架构、租户隔离、计费扣费或前端联动时：
+- 读取 `openspec/context/spring-ai-rag-demo.md` 获取项目专属架构约束
+- 读取 `openspec/config.yaml` 获取通用 OpenSpec 与编码约束
 
-纯粹的技术探讨（不涉及特定模块）可跳过 context 加载。
+纯粹的技术探讨可跳过 context 加载。
 
 ---
 
@@ -183,7 +183,7 @@ You: Real-time collab is a big space. Let me think about this...
 
 **User brings a specific problem:**
 ```
-User: The auth system is a mess
+User: The billing data access is a mess
 
 You: [reads codebase]
 
@@ -214,8 +214,8 @@ You: [reads codebase]
 
 **User is stuck mid-implementation:**
 ```
-User: /opsx:explore add-auth-system
-      The OAuth integration is more complex than expected
+User: /opsx:explore data-access-mybatis-plus-crud
+      The MyBatis-Plus tenant interceptor is more complex than expected
 
 You: [reads change artifacts]
 

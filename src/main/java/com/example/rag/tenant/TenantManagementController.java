@@ -2,8 +2,6 @@ package com.example.rag.tenant;
 
 import java.util.List;
 
-import com.example.rag.dao.entity.TenantEntity;
-import com.example.rag.dao.entity.TenantUserEntity;
 import com.example.rag.vo.AdminVO;
 import com.example.rag.vo.RespVO;
 
@@ -34,9 +32,7 @@ public class TenantManagementController {
 	 */
 	@GetMapping
 	public RespVO<List<AdminVO.TenantItem>> listTenants() {
-		return RespVO.success(tenantManagementService.listTenants().stream()
-			.map(this::toTenantItem)
-			.toList());
+		return RespVO.success(tenantManagementService.listTenants());
 	}
 
 	/**
@@ -47,7 +43,7 @@ public class TenantManagementController {
 	 */
 	@PostMapping
 	public RespVO<Boolean> saveTenant(@RequestBody AdminVO.TenantItem tenant) {
-		return RespVO.success(tenantManagementService.saveTenant(toTenantEntity(tenant)));
+		return RespVO.success(tenantManagementService.saveTenant(tenant));
 	}
 
 	/**
@@ -58,7 +54,7 @@ public class TenantManagementController {
 	 */
 	@PutMapping
 	public RespVO<Boolean> updateTenant(@RequestBody AdminVO.TenantItem tenant) {
-		return RespVO.success(tenantManagementService.updateTenant(toTenantEntity(tenant)));
+		return RespVO.success(tenantManagementService.updateTenant(tenant));
 	}
 
 	/**
@@ -68,9 +64,7 @@ public class TenantManagementController {
 	 */
 	@GetMapping("/users")
 	public RespVO<List<AdminVO.TenantUserItem>> listUsers() {
-		return RespVO.success(tenantManagementService.listUsers().stream()
-			.map(this::toTenantUserItem)
-			.toList());
+		return RespVO.success(tenantManagementService.listUsers());
 	}
 
 	/**
@@ -81,7 +75,7 @@ public class TenantManagementController {
 	 */
 	@PostMapping("/users")
 	public RespVO<Boolean> saveUser(@RequestBody AdminVO.TenantUserItem user) {
-		return RespVO.success(tenantManagementService.saveUser(toTenantUserEntity(user)));
+		return RespVO.success(tenantManagementService.saveUser(user));
 	}
 
 	/**
@@ -92,40 +86,7 @@ public class TenantManagementController {
 	 */
 	@PutMapping("/users")
 	public RespVO<Boolean> updateUser(@RequestBody AdminVO.TenantUserItem user) {
-		return RespVO.success(tenantManagementService.updateUser(toTenantUserEntity(user)));
-	}
-
-	private AdminVO.TenantItem toTenantItem(TenantEntity entity) {
-		return new AdminVO.TenantItem(entity.getId(), entity.getEntCode(), entity.getEntName(),
-			entity.getContact(), entity.getPhone(), entity.getStatus());
-	}
-
-	private TenantEntity toTenantEntity(AdminVO.TenantItem item) {
-		TenantEntity entity = new TenantEntity();
-		entity.setId(item.id());
-		entity.setEntCode(item.entCode());
-		entity.setEntName(item.entName());
-		entity.setContact(item.contact());
-		entity.setPhone(item.phone());
-		entity.setStatus(item.status());
-		return entity;
-	}
-
-	private AdminVO.TenantUserItem toTenantUserItem(TenantUserEntity entity) {
-		return new AdminVO.TenantUserItem(entity.getId(), entity.getUserId(), entity.getEntCode(),
-			entity.getUsername(), entity.getDisplayName(), entity.getRole(), entity.getStatus());
-	}
-
-	private TenantUserEntity toTenantUserEntity(AdminVO.TenantUserItem item) {
-		TenantUserEntity entity = new TenantUserEntity();
-		entity.setId(item.id());
-		entity.setUserId(item.userId());
-		entity.setEntCode(item.entCode());
-		entity.setUsername(item.username());
-		entity.setDisplayName(item.displayName());
-		entity.setRole(item.role());
-		entity.setStatus(item.status());
-		return entity;
+		return RespVO.success(tenantManagementService.updateUser(user));
 	}
 
 }

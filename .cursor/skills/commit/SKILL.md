@@ -23,9 +23,9 @@ Reviewed-by: <git config user.name>
 ```
 
 ## type 选择：
-- `feat`: 新功能（新增 AppService / Controller / 领域事件等）
+- `feat`: 新功能（新增 Controller / Service / Tool / DAO / 前端交互等）
 - `fix`: 修复缺陷
-- `refactor`: 重构（如将旧版三层架构迁移到 DDD）
+- `refactor`: 重构（如数据访问层迁移、服务拆分、配置整理）
 - `docs`: 文档变更（openspec 设计文档等）
 - `style`: 格式调整（不影响逻辑）
 - `test`: 测试相关
@@ -33,21 +33,13 @@ Reviewed-by: <git config user.name>
 
 ## 描述规范：
 - 优先使用中文
-- 指明涉及的业务域（如：群组域、联系人域、语音通话域）
+- 指明涉及的业务域（如：chat、billing、conversation、tool、config、vo、dao、static）
 - 说明变更的核心内容
 
 ## 示例：
 
 ```
-feat: 群组域 — 新增群公告 AppService 和领域事件
-
-AI-Generated: true
-AI-Tool: Cursor
-Reviewed-by: developer
-```
-
-```
-refactor: 联系人域 — 将 MpContactService 重构为 DDD 分层架构
+refactor: 计费域 — 将 JdbcTemplate 查询迁移为 MyBatis-Plus Mapper
 
 AI-Generated: true
 AI-Tool: Cursor

@@ -20,24 +20,22 @@ When ready to implement, run /opsx:apply
 
 **Steps**
 
-0. **模块识别与 context 加载（必须首先执行）**
+0. **项目 context 加载（必须首先执行）**
 
-   本项目是 monorepo，OpenSpec 统一在根目录管理。change 名称必须以模块前缀开头。
+   本项目是单模块 Spring Boot 应用，OpenSpec 统一在仓库根目录管理，**无模块前缀概念**。
 
-   **识别目标模块**（按优先级）：
-   a. 用户明确指定了模块（如「im 模块加个群公告」）→ 直接使用
-   b. 从用户描述的业务语义推断（如「支付回调」→ wallet，「群聊」→ im，「后台权限」→ system）
-   c. 无法判断 → 使用 **AskUserQuestion tool** 询问：
-      > "这个变更属于哪个模块？"
-      > 选项：im（即时通讯）、wallet（钱包支付）、system（后台管理）
+   change 名称按业务域或能力命名，例如：
+   - `chat-stream-mode`
+   - `billing-monthly-quota`
+   - `data-access-mybatis-plus-crud`
 
-   确定后：
-   - **读取** `openspec/context/{module}.md` 获取模块专属架构约束和命名规范
-   - **所有 CLI 命令在项目根目录执行**
-   - **change 名称自动加模块前缀**：如用户说「加群公告」→ `im-add-group-announcement`
-   - 生成 artifact 时，将 CLI 返回的通用 context 与读取的模块 context **一起**作为约束
+   开始前必须读取：
+   - `openspec/context/spring-ai-rag-demo.md`：项目架构、租户隔离、计费扣费、前端约束
+   - `openspec/config.yaml`：通用 OpenSpec 与编码约束
 
-   宣告：「目标模块：**<module>**，change 将创建在 `openspec/changes/{module}-xxx/`」
+   所有 OpenSpec CLI 命令均在仓库根目录执行。
+
+   宣告：「目标项目：**spring-ai-rag-demo**，change 将创建在 `openspec/changes/<name>/`」
 
 1. **If no input provided, ask what they want to build**
 

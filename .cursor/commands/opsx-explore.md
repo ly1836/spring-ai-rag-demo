@@ -13,23 +13,23 @@ Enter explore mode. Think deeply. Visualize freely. Follow the conversation wher
 
 **Input**: The argument after `/opsx:explore` is whatever the user wants to think about. Could be:
 - A vague idea: "real-time collaboration"
-- A specific problem: "the auth system is getting unwieldy"
+- A specific problem: "billing queries are getting unwieldy"
 - A change name: "add-dark-mode" (to explore in context of that change)
 - A comparison: "postgres vs sqlite for this"
 - Nothing (just enter explore mode)
 
 ---
 
-## Monorepo 模块识别
+## 项目 context 识别
 
-本项目是 monorepo，OpenSpec 统一在根目录管理。所有 CLI 命令在根目录执行。
-change 名称以模块前缀开头：im-xxx / wallet-xxx / system-xxx。
+本项目是单模块 Spring Boot 应用，OpenSpec 统一在仓库根目录管理。所有 CLI 命令在根目录执行。
+change 名称按业务域或能力命名（如 `chat-stream-mode`、`billing-monthly-quota`、`data-access-mybatis-plus-crud`），不使用模块前缀。
 
-当话题涉及特定模块时：
-- 读取 `openspec/context/{module}.md` 获取模块专属架构约束
-- 模块 context 文件：`openspec/context/im.md`、`openspec/context/wallet.md`、`openspec/context/system.md`
+当话题涉及代码、架构、租户隔离、计费扣费或前端联动时：
+- 读取 `openspec/context/spring-ai-rag-demo.md` 获取项目专属架构约束
+- 读取 `openspec/config.yaml` 获取通用 OpenSpec 与编码约束
 
-纯粹的技术探讨（不涉及特定模块）可跳过 context 加载。
+纯粹的技术探讨可跳过 context 加载。
 
 ---
 

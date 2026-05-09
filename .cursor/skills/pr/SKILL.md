@@ -16,17 +16,18 @@ description: 基于 git 提交历史生成结构完整的 PR 描述。用于创�
 ## 输出格式：
 
 ### 变更说明
-[描述本次 PR 要解决什么问题、带来了什么功能或修复。如涉及 DDD 重构，说明从哪个架构迁移到什么架构]
+[描述本次 PR 要解决什么问题、带来了什么功能或修复。如涉及架构调整，说明从哪个访问/分层方式迁移到什么方式]
 
 ### 涉及业务域
-[列出本次变更涉及的业务域，如：群组域(biz/group)、联系人域(biz/contact) 等]
+[列出本次变更涉及的业务域，如：chat、billing、conversation、tool、config、vo、dao、static 等]
 
 ### 实现方式
-[说明关键技术实现，按 DDD 分层描述：
-- **Application 层**：新增/修改了哪些 AppService
-- **Domain 层**：新增/修改了哪些领域事件、工厂、校验器、领域服务
-- **Infrastructure 层**：新增/修改了哪些 Gateway、CacheManager、PersistenceService
-- **Model 层**：新增/修改了哪些 Entity、VO、DTO
+[说明关键技术实现，按本项目分层描述：
+- **Controller 层**：新增/修改了哪些接口
+- **Service 层**：新增/修改了哪些业务编排
+- **DAO / Tool / Config 层**：新增/修改了哪些数据访问、工具或配置
+- **VO / Entity 层**：新增/修改了哪些请求响应对象或持久化实体
+- **前端静态资源**：是否修改 `static/app.js`、`style.css`、`index.html` 及缓存版本号
 - **其他**：数据库变更、配置变更等]
 
 ### 设计文档
