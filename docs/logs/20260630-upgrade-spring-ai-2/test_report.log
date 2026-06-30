@@ -1,10 +1,10 @@
 ## 本地验证报告
 
 - Change ID: upgrade-spring-ai-2
-- Latest Verify Time: 2026-06-30 16:35:08
-- 变更范围：Spring AI RAG Demo 单模块升级到 Spring AI 2.0.0 / Spring Boot 4.0.7；涉及 Maven 依赖、Spring AI provider 配置、ChatClient/Advisor 适配、多模型路由、DataSourceProperties import、README/OpenSpec 文档、归档后的 OpenSpec 主 spec 和最小回归测试。
-- 关键路径：Maven 依赖解析与打包；DeepSeek/OpenAI/Google GenAI provider 路由；auto/data/knowledge 三种问答模式的 ChatMemory、RAG、tools 组合；knowledge 模式禁用 ERP tools；Jackson 3 下 `RespVO<T>`/record 序列化；OpenSpec 严格校验；本地启动和基础接口访问。
-- 高风险场景：Spring AI 2.x API 差异导致编译或运行失败；provider bean 名称误配导致模型路由错误；knowledge 模式误暴露 ERP tools；ChatMemory conversation id 丢失或当前用户消息重复；Boot 4 / Jackson 3 序列化差异；PgVector/MySQL 依赖启动失败。
+- Latest Verify Time: 2026-06-30 17:21:17
+- 变更范围：Spring AI RAG Demo 单模块升级到 Spring AI 2.0.0 / Spring Boot 4.0.7；涉及 Maven 依赖、Spring AI provider 配置、ChatClient/Advisor 适配、多模型路由、DataSourceProperties import、README/OpenSpec 文档、归档后的 OpenSpec 主 spec、最小回归测试，以及本次补充的 Docker 镜像 `2.0.0` 发布和 README/docker-compose 镜像版本同步。
+- 关键路径：Maven 依赖解析与打包；DeepSeek/OpenAI/Google GenAI provider 路由；auto/data/knowledge 三种问答模式的 ChatMemory、RAG、tools 组合；knowledge 模式禁用 ERP tools；Jackson 3 下 `RespVO<T>`/record 序列化；OpenSpec 严格校验；本地启动和基础接口访问；Docker 镜像构建、推送和文档镜像引用一致性。
+- 高风险场景：Spring AI 2.x API 差异导致编译或运行失败；provider bean 名称误配导致模型路由错误；knowledge 模式误暴露 ERP tools；ChatMemory conversation id 丢失或当前用户消息重复；Boot 4 / Jackson 3 序列化差异；PgVector/MySQL 依赖启动失败；发布镜像 tag 与 README/docker-compose 引用不一致。
 
 ## 执行记录
 
@@ -15,6 +15,9 @@
 | 2026-06-30 15:37:50 | OpenSpec 严格校验与 git diff 空白检查 | 通过 |
 | 2026-06-30 15:45:37 | 补充 `ChatControllerTest` 接口形态自动化验证，并重新执行全量 Maven 单元测试、OpenSpec 严格校验、git diff 空白检查 | 通过 |
 | 2026-06-30 16:35:08 | 移除归档任务中的外部/手工回归项后，重新执行 `mvn test`、`mvn package -DskipTests`、`openspec validate --all --strict`、`git diff --check` | 通过 |
+| 2026-06-30 17:10:44 | 按当前分支构建并推送 `ly753/spring-ai-rag-demo:2.0.0`，同步 README/README_EN/docker-compose 镜像引用，并复核本地镜像、文档引用、空白错误和中文乱码 | 通过 |
+| 2026-06-30 17:15:49 | 补核 Docker Hub tag metadata，确认 `2.0.0` 远端 tag active、last_updated 和镜像 digest 可见 | 通过 |
+| 2026-06-30 17:21:17 | 提交前重新执行 `mvn test`、`mvn package -DskipTests`、`openspec validate --all --strict`、`git diff --check`、镜像引用扫描、乱码扫描和未解决风险短语扫描 | 通过 |
 
 | 类型 | 结论 | 证据 |
 | --- | --- | --- |
@@ -22,7 +25,8 @@
 | 集成测试 | 通过 | `mvn package -DskipTests`；生成 `target/spring-ai-rag-demo-0.0.1-SNAPSHOT.jar` 并完成 Spring Boot repackage，`BUILD SUCCESS`。此前已通过 Docker Compose 拉起 `pgvector`、`mysql`，确认容器 healthy、5432/13306 可连接，应用可启动到 8080。 |
 | 接口测试 | 通过 | `ChatControllerTest` 覆盖接口包装和 SSE 形态；本地启动后验证 `/` 返回 200，`curl -H "X-Ent-Code: ENT001" http://localhost:8080/api/models` 返回模型列表，`curl -H "X-Ent-Code: ENT001" http://localhost:8080/api/billing/account` 返回 ENT001 计费账户。 |
 | 压测 | 不适用 | 本次变更是 Spring AI 2.x 运行时迁移和 API 适配，不涉及限流、缓存、并发控制、数据库热点或性能参数调整；仓库未发现既有 k6/JMeter/wrk/hey 压测脚本。 |
-| 手工验证 | 通过 | 已执行本地启动、依赖容器健康检查、首页访问、模型列表和计费账户基础接口验证；已按用户要求从归档任务清单移除依赖真实模型 API 和浏览器端到端操作的外部/手工回归项。 |
+| 镜像发布 | 通过 | `docker build --pull -t ly753/spring-ai-rag-demo:2.0.0 .` 已基于当前分支完成构建；`docker push ly753/spring-ai-rag-demo:2.0.0` 返回 digest `sha256:08e435867beed29ba6f39a51cf07d2accd5172659b1221d1c2220dce9e2053cf`；`docker image inspect ly753/spring-ai-rag-demo:2.0.0 --format "{{.Id}} {{.Created}} {{json .RepoTags}}"` 返回本地镜像 ID `sha256:08e435867beed29ba6f39a51cf07d2accd5172659b1221d1c2220dce9e2053cf` 和 tag `2.0.0`；Docker Hub tag API 返回 `name=2.0.0`、`tag_status=active`、`last_updated=2026-06-30T09:00:20.197487Z`、amd64 镜像 digest `sha256:6d888314ad183c1153abd7c6a91828e758376c0f7b29cce34bdb6bda703e1cdf`、`last_pushed=2026-06-30T09:00:17.337918967Z`。 |
+| 手工验证 | 通过 | 已执行本地启动、依赖容器健康检查、首页访问、模型列表和计费账户基础接口验证；已按用户要求从归档任务清单移除依赖真实模型 API 和浏览器端到端操作的外部/手工回归项。本次镜像版本同步补充执行 `rg -n "ly753/spring-ai-rag-demo:(latest|2\.0\.0)|spring-ai-rag-demo:latest" README.md README_EN.md docker-compose.yml`，确认 `docker-compose.yml`、中文 README 和英文 README 均引用 `2.0.0`；执行典型乱码扫描未发现异常。 |
 | 规范校验 | 通过 | `openspec validate --all --strict` 输出 `Totals: 5 passed, 0 failed`；`git diff --check` 无空白错误，仅输出 CRLF 转换提示。 |
 
-- 残余风险：无影响本次提交门禁的残余风险。真实外部 LLM 凭证、模型回答质量和浏览器端到端交互不作为本次 OpenSpec 任务门禁；如后续需要发布前验收，可在具备真实 API Key 和测试环境时单独补充。
+- 残余风险：真实外部 LLM 凭证、模型回答质量和浏览器端到端交互不作为本次 OpenSpec 任务门禁；如后续需要发布前验收，可在具备真实 API Key 和测试环境时单独补充。Docker CLI 的 `docker manifest inspect` 在当前网络下仍会访问超时，但 Docker Hub tag API 已完成远端 tag、状态、更新时间和镜像 digest 复核，不再作为本次提交阻塞风险。
