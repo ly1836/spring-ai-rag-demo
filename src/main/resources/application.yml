@@ -39,7 +39,7 @@ spring:
   ai:
     # DeepSeek 大模型（API Key: https://platform.deepseek.com/api_keys）
     deepseek:
-      api-key: ${DEEPSEEK_API_KEY:sk-95162ae0708f4580acc068b9f70d5c7a}
+      api-key: ${DEEPSEEK_API_KEY:sk-your-deepseek-key}
       chat:
         options:
           # 默认模型，可被请求级 ChatOptions 覆盖
@@ -48,7 +48,7 @@ spring:
     # 通义千问 DashScope OpenAI 兼容接口（API Key: https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key）
     # 注意：base-url 不要加 /v1，Spring AI 会自动追加
     openai:
-      api-key: ${DASHSCOPE_API_KEY:xxxxxxxxx}
+      api-key: ${DASHSCOPE_API_KEY:sk-your-dashscope-key}
       base-url: https://dashscope.aliyuncs.com/compatible-mode
       chat:
         options:
@@ -57,7 +57,7 @@ spring:
     # Google Gemini（API Key: https://aistudio.google.com/app/apikey）
     google:
       genai:
-        api-key: ${GOOGLE_GENAI_API_KEY:xxxxxxxxx}
+        api-key: ${GOOGLE_GENAI_API_KEY:your-google-genai-key}
         chat:
           options:
             model: gemini-2.0-flash

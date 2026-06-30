@@ -1,0 +1,25 @@
+## 本地验证报告
+
+- Change ID: containerized-runtime-init
+- Latest Verify Time: 2026-06-30 12:41:52
+- 变更范围：新增根目录 Dockerfile 并删除不再使用的 `deploy/Dockerfile`；更新 docker-compose 使用远程应用镜像并编排 app、PgVector、MySQL；新增 `com.example.rag.init.ErpDatabaseInitializer`；将初始化 SQL 迁移到 `src/main/resources/db/init/`；更新 README、application.yml、OpenSpec 主规范和归档 change 文档；README 支持不创建 `.env`、直接通过命令行环境变量传入 AI Key。
+- 关键路径：应用镜像打包入口、Compose 配置解析、ERP MySQL 表结构初始化、演示数据幂等插入、SQL 资源进入 classpath、原 chat/billing/conversation/tool 业务路径兼容。
+- 高风险场景：重复启动导致种子数据重复、容器内数据源仍指向 localhost、真实 API Key 被写入配置、顶层 SQL 删除后残留引用、应用初始化误用 PgVector 主数据源。
+
+## 执行记录
+
+| 时间 | 验证范围 | 结论 |
+| --- | --- | --- |
+| 2026-06-30 11:10:30 | 当前 `containerized-runtime-init` 可见 git diff、OpenSpec、Docker/Compose 配置、初始化器测试 | 通过 |
+| 2026-06-30 12:39:34 | 提交前全量 diff、README 命令行环境变量说明、重复 Dockerfile 删除、OpenSpec 严格校验、Maven 测试与打包 | 通过 |
+| 2026-06-30 12:41:52 | OpenSpec 归档、主 spec 同步、活动 change 清空、归档后严格校验 | 通过 |
+
+| 类型 | 结论 | 证据 |
+| --- | --- | --- |
+| 单元测试 | 通过 | `mvn test`：`Tests run: 16, Failures: 0, Errors: 0, Skipped: 0`，`BUILD SUCCESS`，完成时间 `2026-06-30T12:38:58+08:00`。覆盖 `ErpDatabaseInitializerTest`、计费、租户配置、对话历史、ChatMemory Repository 等测试。 |
+| 集成测试 | 未执行真实中间件集成测试 | 用户已要求去掉外部测试部分，未执行 `docker compose up`、真实 MySQL/PgVector 启动和真实应用容器联调。以 `docker compose config`、初始化器内置 SQL 解析测试和 OpenSpec 严格校验覆盖本地可验证部分。 |
+| 接口测试 | 未执行运行时 HTTP 接口测试 | 未启动应用进程和容器运行时，因此未访问 `http://localhost:8080` 或 `/api/**`。本次变更未改 Controller/Service 对外接口，回归由单元测试、静态 diff 审查和 OpenSpec 校验覆盖。 |
+| 压测 | 未执行 | 本次变更不涉及限流、网关转发、缓存、并发写入热路径或性能指标；当前风险主要是启动初始化和容器配置。多副本并发初始化未在本地压测。 |
+| 手工验证 | 通过 | `docker compose config` 在命令行注入 `DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`GOOGLE_GENAI_API_KEY`、`ERP_DB_PASSWORD` 后解析通过，`app.image=ly753/spring-ai-rag-demo:latest`，数据源指向 `pgvector:5432` 与 `mysql:3306`；`mvn package -DskipTests` `BUILD SUCCESS`，完成时间 `2026-06-30T12:39:18+08:00`；使用 .NET zip 读取 jar，确认 `BOOT-INF/classes/db/init/*`、`static/*`、`models/embedding/*` 均已进入包；`openspec archive containerized-runtime-init --yes` 成功创建主 spec 并归档 change；归档后 `openspec validate --all --strict` 通过 4 项，`openspec list --json` 返回空 change 列表；`git diff HEAD --check` 无空白错误，仅 CRLF 提示；乱码扫描无命中；非归档范围搜索无已删除顶层 SQL 的有效残留引用，`deploy/Dockerfile` 仅在归档说明中作为已删除旧副本出现。 |
+
+- 残余风险：未在真实 Docker daemon 上执行 `docker compose up`、未验证远程镜像实际拉取和运行、未验证真实 MySQL 首次/重复启动数据状态。该部分属于用户已要求移除的外部运行时测试范围；提交前如需要发布级把关，应在具备 Docker 运行环境后补充。

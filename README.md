@@ -30,9 +30,18 @@
 - **流式 Markdown 渲染** — SSE 逐 token 推送 + 前端实时 marked.js 渲染（表格、加粗、列表等）
 - **计费管理** — 按 token 用量计费，支持套餐配额、充值、交易流水
 
-## 中间件依赖
+## 启动方式
 
-### 1. PostgreSQL + PgVector（向量数据库）
+项目需要两个中间件：PostgreSQL + PgVector 作为向量库，MySQL 作为 ERP 业务库和计费/对话数据存储。应用启动时会自动初始化 MySQL 表结构和演示数据，并按业务键跳过已存在数据。
+
+AI 问答至少需要配置一个真实模型 Key。Key 获取地址：
+- DeepSeek: https://platform.deepseek.com/api_keys
+- 通义千问: https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key
+- Gemini: https://aistudio.google.com/app/apikey
+
+### 方式一：中间件单独启动 + 本地 Maven 启动应用
+
+适合本地开发调试。先启动 PgVector 和 MySQL：
 
 ```bash
 docker run -d \
@@ -42,97 +51,156 @@ docker run -d \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=rag_demo \
   pgvector/pgvector:pg16
-```
 
-PgVector 表和索引由 Spring AI 启动时自动创建（`initialize-schema: true`）。
-
-### 2. MySQL（ERP 业务数据 + 对话记录 + 计费）
-
-```bash
 docker run -d \
   --name mysql-erp \
   -p 13306:3306 \
-  -e MYSQL_ROOT_PASSWORD=root \
+  -e MYSQL_ROOT_PASSWORD=mm#20250912 \
   -e MYSQL_DATABASE=erp \
   -e MYSQL_CHARSET=utf8mb4 \
-  mysql:8.0
+  mysql:8.0 \
+  --character-set-server=utf8mb4 \
+  --collation-server=utf8mb4_unicode_ci
 ```
 
-需自行导入 ERP 业务表（`b_sales_order`、`b_purchase_order` 等）和平台表（`a_chat_conversation`、`a_chat_message`、`a_billing_account` 等）的建表 SQL。
-
-## 快速启动
-
-### 1. 启动中间件
+已创建过容器时直接启动：
 
 ```bash
 docker start pgvector
 docker start mysql-erp
 ```
 
-### 2. 配置环境变量
+配置 AI Key 后启动应用：
 
 ```bash
-# 必需：至少配置一个模型的 API Key
-export DEEPSEEK_API_KEY=sk-your-deepseek-key
+# Linux/macOS/Git Bash
+export DEEPSEEK_API_KEY=你的DeepSeekKey
+export DASHSCOPE_API_KEY=你的DashScopeKey
+export GOOGLE_GENAI_API_KEY=你的GeminiKey
 
-# 可选：通义千问
-export DASHSCOPE_API_KEY=sk-your-dashscope-key
-
-# 可选：Google Gemini
-export GOOGLE_GENAI_API_KEY=your-google-genai-key
+mvn clean spring-boot:run
 ```
 
-API Key 获取地址：
-- DeepSeek: https://platform.deepseek.com/api_keys
-- 通义千问: https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key
-- Gemini: https://aistudio.google.com/app/apikey
+```powershell
+# Windows PowerShell
+$env:DEEPSEEK_API_KEY="你的DeepSeekKey"
+$env:DASHSCOPE_API_KEY="你的DashScopeKey"
+$env:GOOGLE_GENAI_API_KEY="你的GeminiKey"
 
-### 3. 启动应用
-
-```bash
 mvn clean spring-boot:run
 ```
 
 访问 http://localhost:8080 即可使用。
 
-## Docker 部署
+### 方式二：中间件单独启动 + 单独 Docker 启动应用
 
-### 使用预构建镜像（推荐）
+适合只想用远程应用镜像，但中间件仍由自己管理的场景。先按“方式一”启动 PgVector 和 MySQL，然后启动应用镜像：
 
 ```bash
 docker pull ly753/spring-ai-rag-demo:latest
 
 docker run -d --name rag-demo \
-  --network host \
-  -e DEEPSEEK_API_KEY=sk-your-deepseek-key \
-  -e DASHSCOPE_API_KEY=sk-your-dashscope-key \
-  -e GOOGLE_GENAI_API_KEY=your-google-genai-key \
-  -e ERP_DB_PASSWORD=your-mysql-password \
+  -p 8080:8080 \
+  -e SPRING_DATASOURCE_PGVECTOR_URL=jdbc:postgresql://host.docker.internal:5432/rag_demo \
+  -e SPRING_DATASOURCE_PGVECTOR_USERNAME=postgres \
+  -e SPRING_DATASOURCE_PGVECTOR_PASSWORD=postgres \
+  -e SPRING_DATASOURCE_ERP_URL=jdbc:mysql://host.docker.internal:13306/erp?useSSL=false\&serverTimezone=Asia/Shanghai\&characterEncoding=utf8\&allowPublicKeyRetrieval=true \
+  -e SPRING_DATASOURCE_ERP_USERNAME=root \
+  -e SPRING_DATASOURCE_ERP_PASSWORD=mm#20250912 \
+  -e DEEPSEEK_API_KEY=你的DeepSeekKey \
+  -e DASHSCOPE_API_KEY=你的DashScopeKey \
+  -e GOOGLE_GENAI_API_KEY=你的GeminiKey \
   ly753/spring-ai-rag-demo:latest
 ```
 
-> 需先启动 PgVector 和 MySQL 中间件（见上方"中间件依赖"章节）。
+`host.docker.internal` 用于让应用容器访问宿主机上已映射端口的 PgVector 和 MySQL。Linux 环境如不支持该地址，可以改用 `--network host` 并把数据源地址改回 `localhost`。
 
-### 本地构建镜像
+### 方式三：docker-compose 一键启动（推荐）
 
-```bash
-# 在项目根目录执行
-docker build -f deploy/Dockerfile -t ly753/spring-ai-rag-demo:latest .
-```
+适合直接启动完整运行环境。`docker-compose.yml` 会启动 PgVector、MySQL 和应用容器；应用容器默认使用远程镜像 `ly753/spring-ai-rag-demo:latest`。
 
-构建相关文件位于 `deploy/` 目录：
-
-```
-deploy/
-├── Dockerfile         # 多阶段构建：Maven 编译 + JRE 运行
-└── settings.xml       # Maven 阿里云镜像源加速（解决国内网络问题）
-```
-
-### 使用 docker-compose 一键部署
+不创建 `.env` 时，可以在当前命令行会话中设置环境变量后启动：
 
 ```bash
-# 启动全部服务（PgVector + MySQL + 应用）
+# Linux/macOS/Git Bash
+export DEEPSEEK_API_KEY=你的DeepSeekKey
+export DASHSCOPE_API_KEY=你的DashScopeKey
+export GOOGLE_GENAI_API_KEY=你的GeminiKey
+export ERP_DB_PASSWORD=mm#20250912
+
+docker compose up -d
+```
+
+```powershell
+# Windows PowerShell
+$env:DEEPSEEK_API_KEY="你的DeepSeekKey"
+$env:DASHSCOPE_API_KEY="你的DashScopeKey"
+$env:GOOGLE_GENAI_API_KEY="你的GeminiKey"
+$env:ERP_DB_PASSWORD="mm#20250912"
+
+docker compose up -d
+```
+
+也可以在项目根目录创建 `.env` 文件固定配置 AI Key：
+
+```properties
+# 必需：至少配置一个真实模型 Key
+DEEPSEEK_API_KEY=你的DeepSeekKey
+
+# 可选：通义千问
+DASHSCOPE_API_KEY=你的DashScopeKey
+
+# 可选：Google Gemini
+GOOGLE_GENAI_API_KEY=你的GeminiKey
+
+# 可选：MySQL root 密码，同时会传给应用的 ERP 数据源
+ERP_DB_PASSWORD=mm#20250912
+```
+
+已设置环境变量或 `.env` 后，也可以单独执行启动命令：
+
+```bash
+docker compose up -d
+```
+
+如果使用旧版 Docker Compose，也可以执行：
+
+```bash
 docker-compose up -d
+```
+
+查看服务状态和日志：
+
+```bash
+docker compose ps
+docker compose logs -f app
+```
+
+访问 http://localhost:8080 即可使用。
+
+如果首次启动后又修改了 `ERP_DB_PASSWORD`，MySQL 已存在的数据卷仍会保留旧密码；需要先确认数据可删除，再执行 `docker compose down -v` 清理数据卷后重新启动。
+
+### 本地构建当前应用镜像
+
+如需把当前代码打成与 docker-compose 默认镜像同名的本地镜像：
+
+```bash
+docker build -t ly753/spring-ai-rag-demo:latest .
+```
+
+如需推送到远程仓库：
+
+```bash
+docker login
+docker push ly753/spring-ai-rag-demo:latest
+```
+
+构建入口位于项目根目录，Maven 镜像源配置位于 `deploy/` 目录：
+
+```
+Dockerfile             # 多阶段构建：Maven 编译 + JRE 运行
+deploy/
+└── settings.xml       # Maven 阿里云镜像源加速（解决国内网络问题）
 ```
 
 ## 功能列表

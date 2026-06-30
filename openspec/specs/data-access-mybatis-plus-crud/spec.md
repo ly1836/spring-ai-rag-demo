@@ -7,7 +7,7 @@
 ## Requirements
 
 ### Requirement: ERP 系统表 MyBatis-Plus 数据访问
-系统 SHALL 为 `sql/conversation-billing-schema.sql` 中的租户、用户、对话、消息、Token 用量、套餐、计价规则、计费账户、交易流水和账单表提供 MyBatis-Plus Entity 与 Mapper，用于结构化增删改查和受控业务写入。
+系统 SHALL 为 `classpath:db/init/conversation-billing-schema.sql` 中的租户、用户、对话、消息、Token 用量、套餐、计价规则、计费账户、交易流水和账单表提供 MyBatis-Plus Entity 与 Mapper，用于结构化增删改查和受控业务写入。
 
 #### Scenario: 系统表 Mapper 使用 ERP 数据源
 - **WHEN** 应用启动并加载 MyBatis-Plus Mapper

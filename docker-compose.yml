@@ -1,4 +1,27 @@
 services:
+  # Spring Boot 应用（使用远程镜像，前后端一体部署）
+  app:
+    image: ly753/spring-ai-rag-demo:latest
+    container_name: rag-demo
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_PGVECTOR_URL: jdbc:postgresql://pgvector:5432/rag_demo
+      SPRING_DATASOURCE_PGVECTOR_USERNAME: postgres
+      SPRING_DATASOURCE_PGVECTOR_PASSWORD: postgres
+      SPRING_DATASOURCE_ERP_URL: jdbc:mysql://mysql:3306/erp?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_ERP_USERNAME: root
+      SPRING_DATASOURCE_ERP_PASSWORD: ${ERP_DB_PASSWORD:-mm#20250912}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-sk-your-deepseek-key}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-sk-your-dashscope-key}
+      GOOGLE_GENAI_API_KEY: ${GOOGLE_GENAI_API_KEY:-your-google-genai-key}
+    depends_on:
+      pgvector:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
   # PostgreSQL + PgVector（向量数据库，存储文档嵌入向量）
   pgvector:
     image: pgvector/pgvector:pg16
@@ -11,6 +34,11 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rag_demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     restart: unless-stopped
 
   # MySQL（ERP 业务数据 + 对话记录 + 计费）
@@ -20,13 +48,17 @@ services:
     ports:
       - "13306:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: ${ERP_DB_PASSWORD:-root}
+      MYSQL_ROOT_PASSWORD: ${ERP_DB_PASSWORD:-mm#20250912}
       MYSQL_DATABASE: erp
       MYSQL_CHARSET: utf8mb4
     volumes:
       - mysqldata:/var/lib/mysql
-      - ./sql:/docker-entrypoint-initdb.d
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
     restart: unless-stopped
 
 volumes:

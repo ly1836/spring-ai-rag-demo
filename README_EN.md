@@ -58,7 +58,7 @@ docker run -d \
   mysql:8.0
 ```
 
-You need to import the ERP business tables (`b_sales_order`, `b_purchase_order`, etc.) and platform tables (`a_chat_conversation`, `a_chat_message`, `a_billing_account`, etc.) manually.
+The application initializes ERP business tables (`b_sales_order`, `b_purchase_order`, etc.) and platform tables (`a_chat_conversation`, `a_chat_message`, `a_billing_account`, etc.) on startup, skipping existing seed rows by business keys.
 
 ## Quick Start
 
@@ -117,14 +117,21 @@ docker run -d --name rag-demo \
 
 ```bash
 # Run from project root
-docker build -f deploy/Dockerfile -t ly753/spring-ai-rag-demo:latest .
+docker build -t ly753/spring-ai-rag-demo:latest .
 ```
 
-Build-related files are located in the `deploy/` directory:
+To push the current image to the remote repository:
+
+```bash
+docker login
+docker push ly753/spring-ai-rag-demo:latest
+```
+
+The build entry is in the project root, and the Maven mirror configuration is in the `deploy/` directory:
 
 ```
+Dockerfile             # Multi-stage build: Maven compile + JRE runtime
 deploy/
-├── Dockerfile         # Multi-stage build: Maven compile + JRE runtime
 └── settings.xml       # Aliyun Maven mirror for faster builds in China
 ```
 
@@ -134,6 +141,8 @@ deploy/
 # Start all services (PgVector + MySQL + Application)
 docker-compose up -d
 ```
+
+`docker-compose.yml` uses the remote image `ly753/spring-ai-rag-demo:latest` for the application container and starts PgVector and MySQL. MySQL schema and demo data are initialized idempotently by the application on startup; LLM chat still requires at least one real model API key via environment variables.
 
 ## Features
 
