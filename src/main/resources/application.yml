@@ -37,13 +37,16 @@ app:
 
 spring:
   ai:
+    # Spring AI 2.x 多个 embedding starter 同时存在时，显式选择本地 transformers，避免 PgVector 注入远程 OpenAI EmbeddingModel。
+    model:
+      embedding: transformers
+
     # DeepSeek 大模型（API Key: https://platform.deepseek.com/api_keys）
     deepseek:
       api-key: ${DEEPSEEK_API_KEY:sk-your-deepseek-key}
       chat:
-        options:
-          # 默认模型，可被请求级 ChatOptions 覆盖
-          model: deepseek-chat
+        # 默认模型，可被请求级 ChatOptions 覆盖
+        model: deepseek-chat
 
     # 通义千问 DashScope OpenAI 兼容接口（API Key: https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key）
     # 注意：base-url 不要加 /v1，Spring AI 会自动追加
@@ -51,16 +54,14 @@ spring:
       api-key: ${DASHSCOPE_API_KEY:sk-your-dashscope-key}
       base-url: https://dashscope.aliyuncs.com/compatible-mode
       chat:
-        options:
-          model: qvq-max-2025-03-25
+        model: qvq-max-2025-03-25
 
     # Google Gemini（API Key: https://aistudio.google.com/app/apikey）
     google:
       genai:
         api-key: ${GOOGLE_GENAI_API_KEY:your-google-genai-key}
         chat:
-          options:
-            model: gemini-2.0-flash
+          model: gemini-2.0-flash
 
     # 使用 ONNX Runtime 在本地运行 sentence-transformers 嵌入模型，无需调用远程 API
     # 模型 all-MiniLM-L6-v2：轻量级文本嵌入模型，输出 384 维向量，适合语义搜索/RAG 场景

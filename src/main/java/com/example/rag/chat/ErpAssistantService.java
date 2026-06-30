@@ -8,13 +8,14 @@ import com.example.rag.tool.BaseTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.client.ChatClientAttributes;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.vectorstore.SearchRequest;
@@ -25,8 +26,6 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.SignalType;
 import reactor.core.scheduler.Schedulers;
-
-import org.springframework.ai.tool.ToolCallback;
 
 import java.util.Arrays;
 import java.util.List;
@@ -102,6 +101,9 @@ public class ErpAssistantService {
     /** 非默认 provider → 带 system prompt + tools 的 ChatClient 缓存（懒加载） */
     private final Map<String, ChatClient> providerClientCache = new ConcurrentHashMap<>();
 
+    /** provider → 不带 tools 的 ChatClient 缓存（knowledge / hints 使用） */
+    private final Map<String, ChatClient> providerNoToolsClientCache = new ConcurrentHashMap<>();
+
     /** AI 生成的预置示例问题缓存，首次请求后缓存 */
     private volatile List<String> cachedHints;
 
@@ -149,11 +151,13 @@ public class ErpAssistantService {
         long startTime = System.currentTimeMillis();
         // 挂载会话记忆 + RAG 检索两个 Advisor
         ChatResponse response = this.resolveClient(modelId).prompt()
-                .options(ChatOptions.builder().model(modelName).build())
-                .advisors(MessageChatMemoryAdvisor.builder(chatMemory).conversationId(conversationId).build(),
-                        QuestionAnswerAdvisor.builder(vectorStore)
-                                .searchRequest(this.buildTenantSearchRequest(question))
-                                .build())
+                .options(ChatOptions.builder().model(modelName))
+                .advisors(advisor -> advisor
+                        .param(ChatMemory.CONVERSATION_ID, conversationId)
+                        .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
+                                QuestionAnswerAdvisor.builder(vectorStore)
+                                        .searchRequest(this.buildTenantSearchRequest(question))
+                                        .build()))
                 .user(question)
                 .call()
                 .chatResponse();
@@ -169,11 +173,13 @@ public class ErpAssistantService {
 
         return this.streamWithRecording(
                 this.resolveClient(modelId).prompt()
-                        .options(ChatOptions.builder().model(modelName).build())
-                        .advisors(MessageChatMemoryAdvisor.builder(chatMemory).conversationId(conversationId).build(),
-                                QuestionAnswerAdvisor.builder(vectorStore)
-                                        .searchRequest(this.buildTenantSearchRequest(question))
-                                        .build())
+                        .options(ChatOptions.builder().model(modelName))
+                        .advisors(advisor -> advisor
+                                .param(ChatMemory.CONVERSATION_ID, conversationId)
+                                .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
+                                        QuestionAnswerAdvisor.builder(vectorStore)
+                                                .searchRequest(this.buildTenantSearchRequest(question))
+                                                .build()))
                         .user(question)
                         .stream().chatResponse(),
                 conversationId, mode, modelName);
@@ -190,8 +196,10 @@ public class ErpAssistantService {
         long startTime = System.currentTimeMillis();
         // 仅挂载会话记忆 Advisor，不挂载 RAG Advisor
         ChatResponse response = this.resolveClient(modelId).prompt()
-                .options(ChatOptions.builder().model(modelName).build())
-                .advisors(MessageChatMemoryAdvisor.builder(chatMemory).conversationId(conversationId).build())
+                .options(ChatOptions.builder().model(modelName))
+                .advisors(advisor -> advisor
+                        .param(ChatMemory.CONVERSATION_ID, conversationId)
+                        .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build()))
                 .user(question)
                 .call()
                 .chatResponse();
@@ -207,8 +215,10 @@ public class ErpAssistantService {
 
         return this.streamWithRecording(
                 this.resolveClient(modelId).prompt()
-                        .options(ChatOptions.builder().model(modelName).build())
-                        .advisors(MessageChatMemoryAdvisor.builder(chatMemory).conversationId(conversationId).build())
+                        .options(ChatOptions.builder().model(modelName))
+                        .advisors(advisor -> advisor
+                                .param(ChatMemory.CONVERSATION_ID, conversationId)
+                                .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build()))
                         .user(question)
                         .stream().chatResponse(),
                 conversationId, mode, modelName);
@@ -222,18 +232,19 @@ public class ErpAssistantService {
         String modelName = this.resolveModelName(modelId);
         this.prepareConversation(conversationId, question, mode, requireExistingConversation);
 
-        // 通过 mutate() 创建不带 tools 的 ChatClient 副本，禁止 LLM 调用工具
-        var noToolsClient = this.resolveClient(modelId).mutate()
-                .defaultToolCallbacks(new ToolCallback[0])
-                .build();
+        // 通过不带 tools 的 ChatClient 调用知识模式，禁止 LLM 调用 ERP 工具
+        var noToolsClient = this.resolveNoToolsClient(modelId);
 
         long startTime = System.currentTimeMillis();
         ChatResponse response = noToolsClient.prompt()
-                .options(ChatOptions.builder().model(modelName).build())
-                .advisors(MessageChatMemoryAdvisor.builder(chatMemory).conversationId(conversationId).build(),
-                        QuestionAnswerAdvisor.builder(vectorStore)
-                                .searchRequest(this.buildTenantSearchRequest(question))
-                                .build())
+                .options(ChatOptions.builder().model(modelName))
+                .advisors(advisor -> advisor
+                        .param(ChatMemory.CONVERSATION_ID, conversationId)
+                        .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE)
+                        .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
+                                QuestionAnswerAdvisor.builder(vectorStore)
+                                        .searchRequest(this.buildTenantSearchRequest(question))
+                                        .build()))
                 .user(question)
                 .call()
                 .chatResponse();
@@ -247,17 +258,19 @@ public class ErpAssistantService {
         String modelName = this.resolveModelName(modelId);
         this.prepareConversation(conversationId, question, mode, requireExistingConversation);
 
-        var noToolsClient = this.resolveClient(modelId).mutate()
-                .defaultToolCallbacks(new ToolCallback[0])
-                .build();
+        // 通过不带 tools 的 ChatClient 调用知识模式，禁止 LLM 调用 ERP 工具
+        var noToolsClient = this.resolveNoToolsClient(modelId);
 
         return this.streamWithRecording(
                 noToolsClient.prompt()
-                        .options(ChatOptions.builder().model(modelName).build())
-                        .advisors(MessageChatMemoryAdvisor.builder(chatMemory).conversationId(conversationId).build(),
-                                QuestionAnswerAdvisor.builder(vectorStore)
-                                        .searchRequest(this.buildTenantSearchRequest(question))
-                                        .build())
+                        .options(ChatOptions.builder().model(modelName))
+                        .advisors(advisor -> advisor
+                                .param(ChatMemory.CONVERSATION_ID, conversationId)
+                                .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE)
+                                .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
+                                        QuestionAnswerAdvisor.builder(vectorStore)
+                                                .searchRequest(this.buildTenantSearchRequest(question))
+                                                .build()))
                         .user(question)
                         .stream().chatResponse(),
                 conversationId, mode, modelName);
@@ -332,11 +345,11 @@ public class ErpAssistantService {
             }
 
             // 用不带 tools 的 ChatClient 调用 LLM 生成示例问题
-            var noToolsClient = this.baseChatClient.mutate()
-                    .defaultToolCallbacks(new ToolCallback[0])
-                    .build();
+            var noToolsClient = this.resolveNoToolsClient(null);
 
             String response = noToolsClient.prompt()
+                    .advisors(advisor -> advisor
+                            .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE))
                     .system("你是一个只输出问题的机器，禁止输出任何解释、前言、总结或编号。直接从第一个问题开始输出。")
                     .user("参考以下 ERP 工具能力，生成 4 个简短自然的中文疑问句（每个≤20字），覆盖不同模块，每行一个。\n\n"
                             + "要求：\n"
@@ -589,6 +602,28 @@ public class ErpAssistantService {
                 .similarityThreshold(threshold)
                 .filterExpression(filter)
                 .build();
+    }
+
+    /**
+     * 根据 modelId 获取不带 tools 的 ChatClient。
+     * <p>
+     * knowledge 模式和预置问题生成只需要 LLM 文本能力，不能向模型暴露 ERP Tool。
+     */
+    private ChatClient resolveNoToolsClient(String modelId) {
+        var item = this.modelRegistry.getModelItem(modelId);
+        String provider = item != null ? item.getProvider() : "default";
+        return this.providerNoToolsClientCache.computeIfAbsent(provider, p -> {
+            ChatModel chatModel = this.modelRegistry.getChatModel(modelId);
+            if (chatModel == null) {
+                chatModel = this.modelRegistry.getChatModel(null);
+            }
+            if (chatModel == null) {
+                return this.baseChatClient;
+            }
+            return ChatClient.builder(chatModel)
+                    .defaultSystem(SYSTEM_PROMPT)
+                    .build();
+        });
     }
 
 }

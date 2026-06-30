@@ -28,7 +28,8 @@ import org.springframework.stereotype.Component;
  * <ul>
  *   <li>deepseek  → {@code deepSeekChatModel}</li>
  *   <li>openai    → {@code openAiChatModel}</li>
- *   <li>qwen      → {@code qianFanChatModel} 等（视具体 starter 而定）</li>
+ *   <li>google-genai → {@code googleGenAiChatModel}</li>
+ *   <li>其他 provider 仅保留 Spring AI 2.0.0 已确认适配的映射</li>
  * </ul>
  */
 @Component
@@ -36,23 +37,16 @@ public class ModelRegistry {
 
     /**
      * provider 标识 → Spring AI AutoConfiguration 注册的 ChatModel bean 名称。
-     * 覆盖 Spring AI 1.1.4 所有官方 Chat Model starter。
-     * 新增 provider 时在此追加映射即可。
+     * 仅保留 Spring AI 2.0.0 正式版已确认适配的 provider 映射，未注册 bean 时不会路由生效。
      */
     private static final Map<String, String> PROVIDER_BEAN_NAMES = Map.ofEntries(
             Map.entry("deepseek",          "deepSeekChatModel"),          // spring-ai-starter-model-deepseek
             Map.entry("openai",            "openAiChatModel"),            // spring-ai-starter-model-openai（通义千问等兼容）
             Map.entry("google-genai",      "googleGenAiChatModel"),       // spring-ai-starter-model-google-genai
             Map.entry("anthropic",         "anthropicChatModel"),         // spring-ai-starter-model-anthropic
-            Map.entry("azure-openai",      "azureOpenAiChatModel"),       // spring-ai-starter-model-azure-openai
-            Map.entry("vertex-ai-gemini",  "vertexAiGeminiChatModel"),    // spring-ai-starter-model-vertex-ai-gemini
             Map.entry("ollama",            "ollamaChatModel"),            // spring-ai-starter-model-ollama
             Map.entry("mistral",           "mistralAiChatModel"),         // spring-ai-starter-model-mistral-ai
-            Map.entry("minimax",           "miniMaxChatModel"),           // spring-ai-starter-model-minimax
-            Map.entry("zhipu",             "zhiPuAiChatModel"),           // spring-ai-starter-model-zhipuai
-            Map.entry("huggingface",       "huggingfaceChatModel"),       // spring-ai-starter-model-huggingface
-            Map.entry("bedrock",           "bedrockProxyChatModel"),      // spring-ai-starter-model-bedrock-converse
-            Map.entry("oci-genai",         "oCICohereChatModel")          // spring-ai-starter-model-oci-genai
+            Map.entry("bedrock",           "bedrockProxyChatModel")       // spring-ai-starter-model-bedrock-converse
     );
 
     private final ModelProperties modelProperties;
@@ -72,7 +66,7 @@ public class ModelRegistry {
 
     /**
      * 根据 modelId 返回对应 provider 的基础 {@link ChatClient}。
-     * 调用方需自行通过 {@code .options(ChatOptions.builder().model(modelName).build())}
+     * 调用方需自行通过 {@code .options(ChatOptions.builder().model(modelName))}
      * 在每次请求时覆盖具体的模型名称。
      *
      * @param modelId 前端传入的模型 ID，null 或空时使用默认模型

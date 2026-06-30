@@ -309,18 +309,18 @@ spring:
 
 ### 第三步：注册 provider（仅新服务商需要）
 
-如果新增的服务商不在已有映射中，需在 `ModelRegistry.PROVIDER_BEAN_NAMES` 中添加：
+`ModelRegistry.PROVIDER_BEAN_NAMES` 已内置当前启用 provider，以及 Spring AI 2.0.0 正式版已确认适配的 `anthropic`、`ollama`、`mistral`、`bedrock` 映射。只有新增的服务商仍不在已有映射中时，才需要追加：
 
 ```java
 private static final Map<String, String> PROVIDER_BEAN_NAMES = Map.ofEntries(
     Map.entry("deepseek",     "deepSeekChatModel"),
     Map.entry("openai",       "openAiChatModel"),
-    Map.entry("google-genai", "googleGenAiChatModel")
-    // 新增: Map.entry("anthropic", "anthropicChatModel")
+    Map.entry("google-genai", "googleGenAiChatModel"),
+    // 示例: Map.entry("custom-provider", "customProviderChatModel")
 );
 ```
 
-Bean 名称来自各 Spring AI starter 的 AutoConfiguration 类。
+Bean 名称来自各 Spring AI starter 的 AutoConfiguration 类。`azure-openai`、`vertex-ai-gemini`、`minimax`、`zhipu`、`huggingface`、`oci-genai` 等历史 provider 在 Spring AI 2.0.0 正式版中未确认适配，后续启用前需先核对 starter 坐标和 ChatModel bean 名称。
 
 ## 项目结构
 

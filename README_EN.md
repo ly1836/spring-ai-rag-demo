@@ -250,18 +250,18 @@ spring:
 
 ### Step 3: Register Provider (Only for New Providers)
 
-If the new provider is not already mapped, add it to `ModelRegistry.PROVIDER_BEAN_NAMES`:
+`ModelRegistry.PROVIDER_BEAN_NAMES` already includes the enabled providers and the Spring AI 2.0.0 GA mappings confirmed for `anthropic`, `ollama`, `mistral`, and `bedrock`. Add an entry only when the new provider is still not mapped:
 
 ```java
 private static final Map<String, String> PROVIDER_BEAN_NAMES = Map.ofEntries(
     Map.entry("deepseek",     "deepSeekChatModel"),
     Map.entry("openai",       "openAiChatModel"),
-    Map.entry("google-genai", "googleGenAiChatModel")
-    // Add: Map.entry("anthropic", "anthropicChatModel")
+    Map.entry("google-genai", "googleGenAiChatModel"),
+    // Example: Map.entry("custom-provider", "customProviderChatModel")
 );
 ```
 
-Bean names come from each Spring AI starter's AutoConfiguration class.
+Bean names come from each Spring AI starter's AutoConfiguration class. Historical providers such as `azure-openai`, `vertex-ai-gemini`, `minimax`, `zhipu`, `huggingface`, and `oci-genai` are not confirmed against Spring AI 2.0.0 GA; verify the starter coordinates and ChatModel bean names before enabling them later.
 
 ## Project Structure
 
