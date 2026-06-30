@@ -97,7 +97,7 @@ mvn clean spring-boot:run
 适合只想用远程应用镜像，但中间件仍由自己管理的场景。先按“方式一”启动 PgVector 和 MySQL，然后启动应用镜像：
 
 ```bash
-docker pull ly753/spring-ai-rag-demo:latest
+docker pull ly753/spring-ai-rag-demo:2.0.0
 
 docker run -d --name rag-demo \
   -p 8080:8080 \
@@ -110,14 +110,14 @@ docker run -d --name rag-demo \
   -e DEEPSEEK_API_KEY=你的DeepSeekKey \
   -e DASHSCOPE_API_KEY=你的DashScopeKey \
   -e GOOGLE_GENAI_API_KEY=你的GeminiKey \
-  ly753/spring-ai-rag-demo:latest
+  ly753/spring-ai-rag-demo:2.0.0
 ```
 
 `host.docker.internal` 用于让应用容器访问宿主机上已映射端口的 PgVector 和 MySQL。Linux 环境如不支持该地址，可以改用 `--network host` 并把数据源地址改回 `localhost`。
 
 ### 方式三：docker-compose 一键启动（推荐）
 
-适合直接启动完整运行环境。`docker-compose.yml` 会启动 PgVector、MySQL 和应用容器；应用容器默认使用远程镜像 `ly753/spring-ai-rag-demo:latest`。
+适合直接启动完整运行环境。`docker-compose.yml` 会启动 PgVector、MySQL 和应用容器；应用容器默认使用远程镜像 `ly753/spring-ai-rag-demo:2.0.0`。
 
 不创建 `.env` 时，可以在当前命令行会话中设置环境变量后启动：
 
@@ -185,14 +185,14 @@ docker compose logs -f app
 如需把当前代码打成与 docker-compose 默认镜像同名的本地镜像：
 
 ```bash
-docker build -t ly753/spring-ai-rag-demo:latest .
+docker build -t ly753/spring-ai-rag-demo:2.0.0 .
 ```
 
 如需推送到远程仓库：
 
 ```bash
 docker login
-docker push ly753/spring-ai-rag-demo:latest
+docker push ly753/spring-ai-rag-demo:2.0.0
 ```
 
 构建入口位于项目根目录，Maven 镜像源配置位于 `deploy/` 目录：
@@ -309,18 +309,18 @@ spring:
 
 ### 第三步：注册 provider（仅新服务商需要）
 
-如果新增的服务商不在已有映射中，需在 `ModelRegistry.PROVIDER_BEAN_NAMES` 中添加：
+`ModelRegistry.PROVIDER_BEAN_NAMES` 已内置当前启用 provider，以及 Spring AI 2.0.0 正式版已确认适配的 `anthropic`、`ollama`、`mistral`、`bedrock` 映射。只有新增的服务商仍不在已有映射中时，才需要追加：
 
 ```java
 private static final Map<String, String> PROVIDER_BEAN_NAMES = Map.ofEntries(
     Map.entry("deepseek",     "deepSeekChatModel"),
     Map.entry("openai",       "openAiChatModel"),
-    Map.entry("google-genai", "googleGenAiChatModel")
-    // 新增: Map.entry("anthropic", "anthropicChatModel")
+    Map.entry("google-genai", "googleGenAiChatModel"),
+    // 示例: Map.entry("custom-provider", "customProviderChatModel")
 );
 ```
 
-Bean 名称来自各 Spring AI starter 的 AutoConfiguration 类。
+Bean 名称来自各 Spring AI starter 的 AutoConfiguration 类。`azure-openai`、`vertex-ai-gemini`、`minimax`、`zhipu`、`huggingface`、`oci-genai` 等历史 provider 在 Spring AI 2.0.0 正式版中未确认适配，后续启用前需先核对 starter 坐标和 ChatModel bean 名称。
 
 ## 项目结构
 

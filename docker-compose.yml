@@ -1,7 +1,7 @@
 services:
   # Spring Boot 应用（使用远程镜像，前后端一体部署）
   app:
-    image: ly753/spring-ai-rag-demo:latest
+    image: ly753/spring-ai-rag-demo:2.0.0
     container_name: rag-demo
     ports:
       - "8080:8080"

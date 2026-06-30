@@ -100,7 +100,7 @@ Open http://localhost:8080 in your browser.
 ### Use Pre-built Image (Recommended)
 
 ```bash
-docker pull ly753/spring-ai-rag-demo:latest
+docker pull ly753/spring-ai-rag-demo:2.0.0
 
 docker run -d --name rag-demo \
   --network host \
@@ -108,7 +108,7 @@ docker run -d --name rag-demo \
   -e DASHSCOPE_API_KEY=sk-your-dashscope-key \
   -e GOOGLE_GENAI_API_KEY=your-google-genai-key \
   -e ERP_DB_PASSWORD=your-mysql-password \
-  ly753/spring-ai-rag-demo:latest
+  ly753/spring-ai-rag-demo:2.0.0
 ```
 
 > PgVector and MySQL must be running first (see "Middleware Dependencies" above).
@@ -117,14 +117,14 @@ docker run -d --name rag-demo \
 
 ```bash
 # Run from project root
-docker build -t ly753/spring-ai-rag-demo:latest .
+docker build -t ly753/spring-ai-rag-demo:2.0.0 .
 ```
 
 To push the current image to the remote repository:
 
 ```bash
 docker login
-docker push ly753/spring-ai-rag-demo:latest
+docker push ly753/spring-ai-rag-demo:2.0.0
 ```
 
 The build entry is in the project root, and the Maven mirror configuration is in the `deploy/` directory:
@@ -142,7 +142,7 @@ deploy/
 docker-compose up -d
 ```
 
-`docker-compose.yml` uses the remote image `ly753/spring-ai-rag-demo:latest` for the application container and starts PgVector and MySQL. MySQL schema and demo data are initialized idempotently by the application on startup; LLM chat still requires at least one real model API key via environment variables.
+`docker-compose.yml` uses the remote image `ly753/spring-ai-rag-demo:2.0.0` for the application container and starts PgVector and MySQL. MySQL schema and demo data are initialized idempotently by the application on startup; LLM chat still requires at least one real model API key via environment variables.
 
 ## Features
 
@@ -250,18 +250,18 @@ spring:
 
 ### Step 3: Register Provider (Only for New Providers)
 
-If the new provider is not already mapped, add it to `ModelRegistry.PROVIDER_BEAN_NAMES`:
+`ModelRegistry.PROVIDER_BEAN_NAMES` already includes the enabled providers and the Spring AI 2.0.0 GA mappings confirmed for `anthropic`, `ollama`, `mistral`, and `bedrock`. Add an entry only when the new provider is still not mapped:
 
 ```java
 private static final Map<String, String> PROVIDER_BEAN_NAMES = Map.ofEntries(
     Map.entry("deepseek",     "deepSeekChatModel"),
     Map.entry("openai",       "openAiChatModel"),
-    Map.entry("google-genai", "googleGenAiChatModel")
-    // Add: Map.entry("anthropic", "anthropicChatModel")
+    Map.entry("google-genai", "googleGenAiChatModel"),
+    // Example: Map.entry("custom-provider", "customProviderChatModel")
 );
 ```
 
-Bean names come from each Spring AI starter's AutoConfiguration class.
+Bean names come from each Spring AI starter's AutoConfiguration class. Historical providers such as `azure-openai`, `vertex-ai-gemini`, `minimax`, `zhipu`, `huggingface`, and `oci-genai` are not confirmed against Spring AI 2.0.0 GA; verify the starter coordinates and ChatModel bean names before enabling them later.
 
 ## Project Structure
 
