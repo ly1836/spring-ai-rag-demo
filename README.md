@@ -11,12 +11,13 @@
 | 层级 | 技术 | 版本 |
 |------|------|------|
 | 语言 | Java | 17+ |
-| 框架 | Spring Boot | 3.5.12 |
-| AI 框架 | Spring AI | 1.1.4 |
+| 框架 | Spring Boot | 4.0.7 |
+| AI 框架 | Spring AI | 2.0.0 |
 | 对话模型 | DeepSeek / 通义千问 / Google Gemini | 多模型可切换 |
 | 嵌入模型 | all-MiniLM-L6-v2（ONNX 本地推理） | 384 维向量 |
 | 向量数据库 | PostgreSQL + PgVector | HNSW 索引 |
 | 业务数据库 | MySQL | ERP 业务数据 |
+| 数据访问 | Spring JDBC + MyBatis-Plus | 3.5.16 |
 | 前端 | 原生 HTML/CSS/JS + marked.js + highlight.js | 单页应用 |
 | 流式传输 | SSE（Server-Sent Events） | WebFlux Reactor |
 

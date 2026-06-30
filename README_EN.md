@@ -11,12 +11,13 @@ A manufacturing ERP AI assistant built with Spring AI, integrating **Tool Callin
 | Layer | Technology | Version |
 |-------|-----------|---------|
 | Language | Java | 17+ |
-| Framework | Spring Boot | 3.5.12 |
-| AI Framework | Spring AI | 1.1.4 |
+| Framework | Spring Boot | 4.0.7 |
+| AI Framework | Spring AI | 2.0.0 |
 | Chat Models | DeepSeek / Qwen (Tongyi) / Google Gemini | Multi-model switchable |
 | Embedding Model | all-MiniLM-L6-v2 (ONNX local inference) | 384-dim vectors |
 | Vector Database | PostgreSQL + PgVector | HNSW index |
 | Business Database | MySQL | ERP business data |
+| Data Access | Spring JDBC + MyBatis-Plus | 3.5.16 |
 | Frontend | Vanilla HTML/CSS/JS + marked.js + highlight.js | SPA |
 | Streaming | SSE (Server-Sent Events) | WebFlux Reactor |
 

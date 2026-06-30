@@ -7,8 +7,8 @@ context: |
   `openspec/context/spring-ai-rag-demo.md`，AI 在生成 artifact 前必须先读取该文件。
 
   ## 通用技术栈
-  - Java 17, Spring Boot 3.5.12, Spring AI 1.1.4（BOM 统一管理）
-  - 持久化: Spring JDBC（`JdbcTemplate`），无 JPA / MyBatis
+  - Java 17, Spring Boot 4.0.7, Spring AI 2.0.0（BOM 统一管理）
+  - 持久化: Spring JDBC（`JdbcTemplate`）+ MyBatis-Plus 3.5.16（ERP MySQL 专用），无 JPA
   - 数据库:
     - PostgreSQL + pgvector（向量库 `rag_demo`，`@Primary` 数据源，承载 RAG 与 ChatMemory）
     - MySQL（ERP 业务库 `erp`，承载销售/采购/库存/财务/计费等业务表）
@@ -27,6 +27,7 @@ context: |
   - 数据源选择:
     - VectorStore / ChatMemory 默认走 `@Primary` 的 PgVector
     - ERP 业务查询统一注入 `@Qualifier("erpJdbcTemplate") JdbcTemplate`
+    - MyBatis-Plus Mapper 统一绑定 ERP MySQL 数据源，禁止误用 PgVector 主数据源
   - 多租户隔离: 所有 ERP 查询**必须**继承 `tool/BaseTool` 通过 `query()` / `queryWithAlias()` 执行，自动追加 `AND ent_code = ?`；**禁止**直接 `erpJdbcTemplate.queryXxx()` 绕过隔离
   - 租户上下文: 通过 `TenantContext.requireEntCode()` 读取，异步/响应式链路必须经 `TenantContextAccessor` 透传
   - ChatModel 路由: 业务代码统一通过 `ModelRegistry.getChatModel(modelId)` 获取，**禁止**直接注入 `deepSeekChatModel` / `openAiChatModel` 等具体 provider Bean
