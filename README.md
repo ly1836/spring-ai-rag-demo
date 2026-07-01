@@ -100,7 +100,7 @@ mvn clean spring-boot:run
 适合只想用远程应用镜像，但中间件仍由自己管理的场景。先按“方式一”启动 PgVector 和 MySQL，然后启动应用镜像：
 
 ```bash
-docker pull ly753/spring-ai-rag-demo:2.0.0
+docker pull ly753/spring-ai-rag-demo:2.1.1
 
 docker run -d --name rag-demo \
   -p 8080:8080 \
@@ -113,14 +113,14 @@ docker run -d --name rag-demo \
   -e DEEPSEEK_API_KEY=你的DeepSeekKey \
   -e DASHSCOPE_API_KEY=你的DashScopeKey \
   -e GOOGLE_GENAI_API_KEY=你的GeminiKey \
-  ly753/spring-ai-rag-demo:2.0.0
+  ly753/spring-ai-rag-demo:2.1.1
 ```
 
 `host.docker.internal` 用于让应用容器访问宿主机上已映射端口的 PgVector 和 MySQL。Linux 环境如不支持该地址，可以改用 `--network host` 并把数据源地址改回 `localhost`。
 
 ### 方式三：docker-compose 一键启动（推荐）
 
-适合直接启动完整运行环境。`docker-compose.yml` 会启动 PgVector、MySQL 和应用容器；应用容器默认使用远程镜像 `ly753/spring-ai-rag-demo:2.0.0`。
+适合直接启动完整运行环境。`docker-compose.yml` 会启动 PgVector、MySQL 和应用容器；应用容器默认使用远程镜像 `ly753/spring-ai-rag-demo:2.1.1`。
 
 不创建 `.env` 时，可以在当前命令行会话中设置环境变量后启动：
 
@@ -188,14 +188,14 @@ docker compose logs -f app
 如需把当前代码打成与 docker-compose 默认镜像同名的本地镜像：
 
 ```bash
-docker build -t ly753/spring-ai-rag-demo:2.0.0 .
+docker build -t ly753/spring-ai-rag-demo:2.1.1 .
 ```
 
 如需推送到远程仓库：
 
 ```bash
 docker login
-docker push ly753/spring-ai-rag-demo:2.0.0
+docker push ly753/spring-ai-rag-demo:2.1.1
 ```
 
 构建入口位于项目根目录，Maven 镜像源配置位于 `deploy/` 目录：
