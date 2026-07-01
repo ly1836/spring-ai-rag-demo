@@ -1,6 +1,8 @@
 package com.example.rag.init;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -10,6 +12,7 @@ import org.springframework.core.io.DefaultResourceLoader;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -101,6 +104,22 @@ class ErpDatabaseInitializerTest {
 		ErpDatabaseInitializer bundledInitializer = new ErpDatabaseInitializer(jdbcTemplate, new DefaultResourceLoader());
 
 		bundledInitializer.initialize();
+	}
+
+	/**
+	 * 验证内置动态 Tool 初始化数据包含库存批次库位查询示例。
+	 */
+	@Test
+	public void shouldContainInventoryLotLocationToolSeed() throws Exception {
+		String script = Files.readString(Path.of("src/main/resources/db/init/conversation-billing-schema.sql"),
+			StandardCharsets.UTF_8);
+
+		assertThat(script)
+			.contains("query_inventory_lot_location")
+			.contains("lotNo")
+			.contains("b_inventory i")
+			.contains("'i'")
+			.contains("动态 Tool 示例：按库存批次号查询仓库库位");
 	}
 
 }

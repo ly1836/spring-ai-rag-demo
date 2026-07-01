@@ -3,7 +3,7 @@ package com.example.rag.vo;
 import java.util.List;
 
 /**
- * 对话记录模块 VO —— {@link com.example.rag.conversation.ConversationController} 的入参和出参定义。
+ * 对话记录模块 VO —— {@link com.example.rag.controller.ConversationController} 的入参和出参定义。
  * <p>
  * 包含会话列表查询、会话消息查询、会话删除的请求/响应对象。
  */

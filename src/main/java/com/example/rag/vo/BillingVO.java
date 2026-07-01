@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * 计费模块 VO —— {@link com.example.rag.billing.BillingController} 的入参和出参定义。
+ * 计费模块 VO —— {@link com.example.rag.controller.BillingController} 的入参和出参定义。
  * <p>
  * 包含账户查询、套餐列表、交易流水、充值、用量统计的请求/响应对象。
  */

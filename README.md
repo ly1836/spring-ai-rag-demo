@@ -2,7 +2,7 @@
 
 # ERP 智能助手 — Spring AI RAG Demo
 
-基于 Spring AI 构建的制造业 ERP 智能助手，集成了 **Tool Calling**（实时查询业务数据）和 **RAG**（检索产品手册知识）两大 AI 能力，支持多模型切换、流式对话、会话记忆、多租户隔离和计费管理。
+基于 Spring AI 构建的制造业 ERP 智能助手，集成了 **Tool Calling**（实时查询业务数据）和 **RAG**（检索产品手册知识）两大 AI 能力，支持多模型切换、流式对话、会话记忆、多租户隔离、计费管理、动态 Tool 管理和 Tool 命中追踪。
 
 ![示例截图](doc/img.png)
 
@@ -23,17 +23,19 @@
 
 ### 核心特性
 
-- **Spring AI Tool Calling** — LLM 自动调用 8 大 ERP 模块的 `@Tool` 方法查询 MySQL 实时数据
+- **Spring AI Tool Calling** — LLM 自动调用 8 大 ERP 模块的代码 `@Tool` 和数据库动态 Tool 查询 MySQL 实时数据
 - **Spring AI RAG** — `QuestionAnswerAdvisor` 从 PgVector 检索产品手册片段注入 prompt 上下文
 - **多模型切换** — 前端下拉框选择模型，后端通过 `ModelRegistry` 路由到对应 provider 的 `ChatModel`
 - **会话记忆** — `MessageChatMemoryAdvisor` + `JdbcChatMemoryRepository` 基于数据库的上下文记忆
 - **多租户隔离** — 所有数据查询和向量检索自动按 `ent_code` 隔离
 - **流式 Markdown 渲染** — SSE 逐 token 推送 + 前端实时 marked.js 渲染（表格、加粗、列表等）
+- **动态 Tool 管理** — 通过前端维护数据库 SQL 查询类 Tool，保存后刷新运行期 Tool 快照
+- **Tool 命中追踪** — 记录每次 Tool 调用的租户、会话、模型、入参、状态、耗时和结果规模
 - **计费管理** — 按 token 用量计费，支持套餐配额、充值、交易流水
 
 ## 启动方式
 
-项目需要两个中间件：PostgreSQL + PgVector 作为向量库，MySQL 作为 ERP 业务库和计费/对话数据存储。应用启动时会自动初始化 MySQL 表结构和演示数据，并按业务键跳过已存在数据。
+项目需要两个中间件：PostgreSQL + PgVector 作为向量库，MySQL 作为 ERP 业务库、计费/对话数据、动态 Tool 配置和 Tool 命中流水存储。应用启动时会自动初始化 MySQL 表结构和演示数据，并按业务键跳过已存在数据。
 
 AI 问答至少需要配置一个真实模型 Key。Key 获取地址：
 - DeepSeek: https://platform.deepseek.com/api_keys
@@ -219,7 +221,11 @@ deploy/
 | 预置示例问题 | AI 根据 Tool 描述自动生成，页面加载时展示 |
 | 消息复制 | 所有消息气泡支持一键复制 |
 
-### ERP Tool Calling（8 大模块，39 个工具方法）
+### ERP Tool Calling（代码 Tool + 动态数据库 Tool）
+
+系统会把现有 `com.example.rag.tool` 下的代码 `@Tool` 与启用状态的数据库动态 Tool 合并成同一份 Spring AI Tool 快照。auto/data 模式可调用 Tool；knowledge 模式只使用 RAG，不暴露 Tool。
+
+#### 代码 ERP Tool（8 大模块，39 个工具方法）
 
 | 模块 | 工具数 | 支持的查询 |
 |------|--------|-----------|
@@ -233,6 +239,20 @@ deploy/
 | 委外 | 4 | 订单列表/详情/来料退料 + 按时间查询 |
 
 所有工具方法支持自然语言时间表达（"最近一周"、"本月"、"今年"等），LLM 自动转换为日期范围。
+
+#### 动态 LLM Tool 管理
+
+| 功能 | 说明 |
+|------|------|
+| 数据库定义 | `a_llm_tool` 全局维护 Tool 名称、描述、入参 JSON Schema、SQL 模板、主表别名、返回行数和状态 |
+| 前端管理 | 顶部「工具管理」页面支持新增、编辑、删除、启停、刷新加载和 Tool 命中流水查看 |
+| 运行期刷新 | Tool 配置保存、删除或启停后刷新 `ToolSnapshot`，后续 LLM 问答使用最新 Tool |
+| 租户隔离 | 动态 Tool 定义全局共享，但执行时强制读取当前 `ent_code` 并注入 SQL 查询条件 |
+| SQL 安全 | 首期只允许单层只读 `SELECT`，使用绑定变量，拒绝写入、DDL、多语句、复杂查询块和非法主表别名 |
+| 命中流水 | `a_tool_call_log` 记录 Tool 来源、入参、状态、耗时、结果数、错误摘要和助手消息关联 |
+| 前端展示 | 状态和来源展示中文文案，前后端传输仍保持 `active`/`inactive`、`code`/`database` 英文枚举 |
+| Schema 辅助 | 入参 Schema 编辑区提供 JSON Schema 说明、参数命名约束和可编辑示例数据 |
+| 初始化示例 | 默认演示数据包含 `query_dynamic_sales_orders` 和 `query_inventory_lot_location` |
 
 ### 文档管理
 
@@ -329,21 +349,33 @@ Bean 名称来自各 Spring AI starter 的 AutoConfiguration 类。`azure-openai
 com.example.rag
 ├── RagDemoApplication              # 启动类
 ├── chat/                           # AI 对话核心
-│   ├── ChatController              # HTTP 接口（问答/文档/模型列表/hints）
 │   ├── ErpAssistantService         # LLM 问答 + Tool Calling + RAG + 多模型路由
 │   ├── DocumentLoaderService       # 文档导入向量库
 │   └── ModelRegistry               # 多模型注册中心（provider → ChatClient 缓存）
-├── conversation/                   # 对话历史
+├── controller/                     # HTTP Controller 入口
+│   ├── ChatController              # 问答/文档/模型列表/hints
 │   ├── ConversationController      # 历史记录 API
+│   ├── BillingController / BillingManagementController
+│   ├── TenantManagementController
+│   └── ToolManagementController    # 动态 Tool 管理和命中流水 API
+├── conversation/                   # 对话历史
 │   ├── ChatHistoryService          # 会话/消息 CRUD
 │   └── JdbcChatMemoryRepository    # Spring AI ChatMemory 的 JDBC 实现
 ├── billing/                        # 计费
-│   ├── BillingController
+│   ├── BillingManagementService
 │   └── BillingService
 ├── tool/                           # ERP Tool Calling（8 个模块）
 │   ├── BaseTool                    # 租户隔离基类（自动注入 ent_code）
 │   ├── SalesTool / PurchaseTool / ProductionTool / QualityTool
 │   ├── WarehouseTool / FinanceTool / AfterSalesTool / OutsourcingTool
+│   ├── admin/                      # 动态 Tool 管理服务
+│   ├── dynamic/                    # 数据库 Tool SQL 校验、绑定、租户注入和执行
+│   ├── registry/                   # Tool 快照注册和刷新
+│   └── trace/                      # Tool 命中流水和本轮调用聚合
+├── dao/                            # MyBatis-Plus Entity / Mapper
+│   ├── entity/                     # 会话、计费、租户、Tool 定义和调用日志实体
+│   └── mapper/                     # ERP MySQL 数据访问 Mapper
+├── init/                           # MySQL 表结构和演示数据初始化
 ├── config/                         # 配置
 │   ├── ModelProperties             # 多模型 YAML 配置绑定
 │   ├── ChatModelConfig             # @Primary ChatModel 声明
@@ -352,5 +384,5 @@ com.example.rag
 │   ├── ContextPropagationConfig    # Reactor 上下文传播
 │   └── GlobalExceptionHandler
 └── vo/                             # 请求/响应对象
-    ├── ChatVO / ConversationVO / BillingVO / RespVO
+    ├── ChatVO / ConversationVO / BillingVO / AdminVO / RespVO
 ```

@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * AI 问答模块 VO —— {@link com.example.rag.chat.ChatController} 的入参和出参定义。
+ * AI 问答模块 VO —— {@link com.example.rag.controller.ChatController} 的入参和出参定义。
  * <p>
  * 包含文档管理、AI 问答、文档搜索三类接口的请求/响应对象。
  */

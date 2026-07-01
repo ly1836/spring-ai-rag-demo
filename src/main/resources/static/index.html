@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ERP 智能助手</title>
-  <link rel="stylesheet" href="style.css?v=10">
+  <link rel="stylesheet" href="style.css?v=11">
   <link rel="stylesheet" href="vendor/highlight-github.min.css?v=1">
 </head>
 <body>
@@ -16,6 +16,7 @@
       <button class="nav-btn active" data-tab="chat" onclick="switchTab('chat')">&#128172; AI 对话</button>
       <button class="nav-btn" data-tab="history" onclick="switchTab('history')">&#128214; 历史记录</button>
       <button class="nav-btn" data-tab="billing" onclick="switchTab('billing')">&#128176; 计费管理</button>
+      <button class="nav-btn" data-tab="tools" onclick="switchTab('tools')">&#128295; 工具管理</button>
     </nav>
     <div class="header-config">
       <label>租户</label>
@@ -152,8 +153,59 @@
     </div>
   </div>
 
+  <!-- ============================== TAB: 工具管理 ============================== -->
+  <div class="tab-panel" id="tabTools">
+    <div class="billing-layout">
+      <div class="panel-toolbar">
+        <h3>&#128295; LLM Tool 管理</h3>
+        <div>
+          <button class="btn btn-outline btn-sm" onclick="refreshDynamicTools()">&#x21bb; 刷新加载</button>
+          <button class="btn btn-primary btn-sm" onclick="loadToolManagement()">刷新页面</button>
+        </div>
+      </div>
+      <div class="tool-grid">
+        <div class="billing-content tool-form-panel">
+          <h4>Tool 定义</h4>
+          <input type="hidden" id="toolId">
+          <div class="tool-form-grid">
+            <div class="form-row"><label>Tool 名称</label><input type="text" id="toolName" placeholder="query_sales_order"></div>
+            <div class="form-row"><label>状态</label><select id="toolStatus"><option value="active">启用</option><option value="inactive">停用</option></select></div>
+            <div class="form-row"><label>主表别名</label><input type="text" id="toolTableAlias" placeholder="o"></div>
+            <div class="form-row"><label>返回行数</label><input type="number" id="toolResultLimit" min="1" max="500" value="50"></div>
+          </div>
+          <div class="form-row"><label>Tool 描述</label><textarea id="toolDesc" rows="2"></textarea></div>
+          <div class="form-row">
+            <label>入参 Schema（JSON Schema）</label>
+            <div class="field-help">说明：字段名需与 SQL 模板中的参数名一致，description 会帮助模型理解参数含义。示例：按客户名称查询销售订单；示例数据：{"customerName":"华东客户"}。</div>
+            <textarea id="toolInputSchema" rows="9" placeholder="清空表单后会自动填入示例 JSON Schema"></textarea>
+          </div>
+          <div class="form-row"><label>SQL 模板</label><textarea id="toolSqlTemplate" rows="7"></textarea></div>
+          <div class="form-row"><label>备注</label><input type="text" id="toolRemark"></div>
+          <div class="tool-form-actions">
+            <button class="btn btn-primary" onclick="saveToolDefinition()">保存</button>
+            <button class="btn btn-outline" onclick="resetToolForm()">清空</button>
+          </div>
+        </div>
+        <div class="billing-content tool-list-panel">
+          <div class="panel-toolbar compact">
+            <h4>Tool 列表</h4>
+            <button class="btn btn-outline btn-sm" onclick="loadToolDefinitions()">刷新</button>
+          </div>
+          <div id="toolList"><p class="placeholder-text">加载中...</p></div>
+        </div>
+      </div>
+      <div class="billing-content">
+        <div class="panel-toolbar compact">
+          <h4>Tool 命中流水</h4>
+          <button class="btn btn-outline btn-sm" onclick="loadToolCallLogs()">刷新</button>
+        </div>
+        <div id="toolCallLogs"><p class="placeholder-text">加载中...</p></div>
+      </div>
+    </div>
+  </div>
+
   <script src="vendor/marked.min.js?v=1"></script>
   <script src="vendor/highlight.min.js?v=1"></script>
-  <script src="app.js?v=15"></script>
+  <script src="app.js?v=19"></script>
 </body>
 </html>
