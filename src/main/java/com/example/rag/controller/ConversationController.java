@@ -1,5 +1,6 @@
-package com.example.rag.conversation;
+package com.example.rag.controller;
 
+import com.example.rag.conversation.ChatHistoryService;
 import com.example.rag.vo.ConversationVO;
 import com.example.rag.vo.RespVO;
 

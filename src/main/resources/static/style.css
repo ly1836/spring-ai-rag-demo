@@ -310,6 +310,30 @@ body {
 
 .billing-content { background: var(--surface); border-radius: var(--radius); padding: 16px; border: 1px solid var(--border); min-height: 200px; overflow-x: auto; }
 
+/* 工具管理 */
+.tool-grid { display: grid; grid-template-columns: minmax(360px, 0.9fr) minmax(420px, 1.1fr); gap: 16px; align-items: start; }
+.tool-form-panel h4, .tool-list-panel h4 { margin-bottom: 12px; font-size: 15px; }
+.tool-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.tool-form-actions { display: flex; gap: 8px; margin-top: 12px; }
+.panel-toolbar.compact { margin-bottom: 12px; }
+.form-row textarea, .form-row select {
+  width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 7px;
+  font-size: 13px; font-family: inherit; background: var(--surface); color: var(--text);
+}
+.form-row textarea { resize: vertical; font-family: Consolas, 'Courier New', monospace; line-height: 1.5; }
+.form-row textarea:focus, .form-row select:focus { outline: none; border-color: var(--primary); }
+/* 表单字段说明文本 */
+.field-help { margin: -1px 0 6px; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.tool-name-cell { font-family: Consolas, 'Courier New', monospace; font-weight: 600; }
+.tool-actions { display: flex; gap: 6px; }
+.status-badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; background: var(--bg); }
+.status-badge.active { color: var(--success); background: #ecfdf5; }
+.status-badge.inactive { color: var(--text-muted); background: #f3f4f6; }
+
+@media (max-width: 1100px) {
+  .tool-grid { grid-template-columns: 1fr; }
+}
+
 /* 套餐卡片 */
 .plans-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
 .plan-card {

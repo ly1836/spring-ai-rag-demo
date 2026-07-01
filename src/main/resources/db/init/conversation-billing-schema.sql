@@ -224,6 +224,52 @@ CREATE TABLE IF NOT EXISTS a_billing_invoice (
     INDEX idx_billing_month (billing_month)
 ) COMMENT '月度账单表';
 
+-- ==========================================================
+-- 5. LLM Tool 管理与调用链路
+-- ==========================================================
+
+-- LLM 动态 Tool 定义表（全局配置，不按租户隔离）
+CREATE TABLE IF NOT EXISTS a_llm_tool (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    tool_name     VARCHAR(64)  NOT NULL COMMENT 'Tool 名称',
+    tool_desc     VARCHAR(500) NOT NULL COMMENT 'Tool 描述',
+    input_schema  TEXT         NOT NULL COMMENT 'Tool 入参 JSON Schema',
+    sql_template  TEXT         NOT NULL COMMENT '只读 SQL 模板',
+    table_alias   VARCHAR(32)           COMMENT '主表别名，用于拼接租户条件',
+    result_limit  INT          NOT NULL DEFAULT 50 COMMENT '最大返回行数',
+    status        VARCHAR(10)  NOT NULL DEFAULT 'active' COMMENT '状态: active/inactive',
+    remark        VARCHAR(500)          COMMENT '备注',
+    created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_tool_name (tool_name),
+    INDEX idx_status (status)
+) COMMENT 'LLM 动态 Tool 定义表';
+
+-- LLM Tool 命中流水表（按租户隔离）
+CREATE TABLE IF NOT EXISTS a_tool_call_log (
+    id             BIGINT AUTO_INCREMENT PRIMARY KEY,
+    trace_id       VARCHAR(36)  NOT NULL COMMENT '单次问答链路 ID',
+    conversation_id VARCHAR(36)          COMMENT '会话 ID',
+    message_id     VARCHAR(36)           COMMENT '助手消息 ID',
+    ent_code       VARCHAR(32)  NOT NULL COMMENT '租户编码',
+    user_id        VARCHAR(32)           COMMENT '用户 ID',
+    mode           VARCHAR(20)           COMMENT '问答模式',
+    model          VARCHAR(50)           COMMENT '使用模型',
+    tool_name      VARCHAR(64)  NOT NULL COMMENT 'Tool 名称',
+    tool_type      VARCHAR(20)  NOT NULL COMMENT 'Tool 来源: code/database',
+    arguments_json TEXT                  COMMENT 'Tool 入参 JSON',
+    result_count   INT          NOT NULL DEFAULT 0 COMMENT '返回结果条数',
+    duration_ms    BIGINT                COMMENT '调用耗时（毫秒）',
+    status         VARCHAR(10)  NOT NULL DEFAULT 'success' COMMENT '状态: success/error',
+    error_message  VARCHAR(500)          COMMENT '错误信息',
+    created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_trace_id (trace_id),
+    INDEX idx_ent_conversation (ent_code, conversation_id),
+    INDEX idx_tool_name (tool_name),
+    INDEX idx_created_at (created_at),
+    INDEX idx_ent_created_at (ent_code, created_at)
+) COMMENT 'LLM Tool 命中流水表';
+
 
 -- ============================================================
 -- 二、DML —— 模拟数据
@@ -352,3 +398,22 @@ INSERT INTO a_billing_transaction (transaction_no, ent_code, type, amount, balan
 INSERT INTO a_billing_invoice (invoice_no, ent_code, billing_month, plan_code, plan_fee, token_usage_fee, total_amount, total_tokens, total_requests, status, paid_at) VALUES
 ('INV-ENT001-202603', 'ENT001', '2026-03', 'PRO',   399.00, 0.00, 399.00, 9040, 9,  'paid', '2026-03-01 09:00:00'),
 ('INV-ENT002-202603', 'ENT002', '2026-03', 'BASIC', 99.00,  0.00, 99.00,  600,  1,  'paid', '2026-03-01 10:00:00');
+
+-- 动态 Tool 示例
+INSERT INTO a_llm_tool (tool_name, tool_desc, input_schema, sql_template, table_alias, result_limit, status, remark) VALUES
+('query_dynamic_sales_orders',
+ '按客户名称查询销售订单列表，返回订单号、客户、订单日期、状态和金额',
+ '{"type":"object","properties":{"customerName":{"type":"string","description":"客户名称关键字"}},"required":["customerName"]}',
+ 'SELECT o.order_no, o.customer_name, o.order_date, o.status, o.total_amount FROM b_sales_order o WHERE o.customer_name LIKE CONCAT(''%'', :customerName, ''%'') ORDER BY o.order_date DESC LIMIT 20',
+ 'o',
+ 20,
+ 'active',
+ '动态 Tool 示例：销售订单查询'),
+('query_inventory_lot_location',
+ '按库存批次号查询物料或产品所在仓库、库位、可用库存、预留库存和在途库存',
+ '{"type":"object","properties":{"lotNo":{"type":"string","description":"库存批次号，例如：L20260303"}},"required":["lotNo"]}',
+ 'SELECT i.lot_no, i.product_code, i.product_name, i.warehouse, i.location, i.available_qty, i.reserved_qty, i.in_transit_qty, i.unit FROM b_inventory i WHERE i.lot_no = :lotNo ORDER BY i.product_code ASC',
+ 'i',
+ 20,
+ 'active',
+ '动态 Tool 示例：按库存批次号查询仓库库位');

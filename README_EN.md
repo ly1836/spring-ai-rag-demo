@@ -2,7 +2,7 @@ English | [中文](README.md)
 
 # ERP AI Assistant — Spring AI RAG Demo
 
-A manufacturing ERP AI assistant built with Spring AI, integrating **Tool Calling** (real-time business data queries) and **RAG** (product manual knowledge retrieval). Supports multi-model switching, streaming chat, conversation memory, multi-tenant isolation, and billing management.
+A manufacturing ERP AI assistant built with Spring AI, integrating **Tool Calling** (real-time business data queries) and **RAG** (product manual knowledge retrieval). Supports multi-model switching, streaming chat, conversation memory, multi-tenant isolation, billing management, dynamic Tool management, and Tool call tracing.
 
 ![Screenshot](doc/img.png)
 
@@ -23,12 +23,14 @@ A manufacturing ERP AI assistant built with Spring AI, integrating **Tool Callin
 
 ### Key Features
 
-- **Spring AI Tool Calling** — LLM automatically invokes `@Tool` methods across 8 ERP modules to query MySQL in real time
+- **Spring AI Tool Calling** — LLM automatically invokes code `@Tool` methods across 8 ERP modules and database-defined dynamic Tools to query MySQL in real time
 - **Spring AI RAG** — `QuestionAnswerAdvisor` retrieves product manual snippets from PgVector and injects them into the prompt context
 - **Multi-Model Switching** — Frontend dropdown selects a model; backend routes to the corresponding provider's `ChatModel` via `ModelRegistry`
 - **Conversation Memory** — `MessageChatMemoryAdvisor` + `JdbcChatMemoryRepository` for database-backed context memory
 - **Multi-Tenant Isolation** — All data queries and vector searches are automatically filtered by `ent_code`
 - **Streaming Markdown Rendering** — SSE token-by-token push + real-time marked.js rendering (tables, bold, lists, etc.)
+- **Dynamic Tool Management** — Maintain SQL query Tools from the frontend and refresh the runtime Tool snapshot after changes
+- **Tool Call Tracing** — Persist each Tool call with tenant, conversation, model, arguments, status, duration, and result size
 - **Billing Management** — Token-based billing with plan quotas, recharging, and transaction history
 
 ## Middleware Dependencies
@@ -47,7 +49,7 @@ docker run -d \
 
 PgVector tables and indexes are auto-created on startup (`initialize-schema: true`).
 
-### 2. MySQL (ERP Business Data + Chat History + Billing)
+### 2. MySQL (ERP Business Data + Chat History + Billing + Dynamic Tools)
 
 ```bash
 docker run -d \
@@ -59,7 +61,7 @@ docker run -d \
   mysql:8.0
 ```
 
-The application initializes ERP business tables (`b_sales_order`, `b_purchase_order`, etc.) and platform tables (`a_chat_conversation`, `a_chat_message`, `a_billing_account`, etc.) on startup, skipping existing seed rows by business keys.
+The application initializes ERP business tables (`b_sales_order`, `b_purchase_order`, etc.) and platform tables (`a_chat_conversation`, `a_chat_message`, `a_billing_account`, `a_llm_tool`, `a_tool_call_log`, etc.) on startup, skipping existing seed rows by business keys.
 
 ## Quick Start
 
@@ -160,7 +162,11 @@ docker-compose up -d
 | Preset Hints | AI-generated sample questions based on Tool descriptions |
 | Message Copy | One-click copy on all message bubbles |
 
-### ERP Tool Calling (8 Modules, 39 Tool Methods)
+### ERP Tool Calling (Code Tools + Dynamic Database Tools)
+
+The system merges existing code `@Tool` objects under `com.example.rag.tool` with enabled database-defined dynamic Tools into one Spring AI Tool snapshot. auto/data modes can call Tools; knowledge mode uses RAG only and does not expose Tools.
+
+#### Code ERP Tools (8 Modules, 39 Tool Methods)
 
 | Module | Tools | Supported Queries |
 |--------|-------|-------------------|
@@ -174,6 +180,20 @@ docker-compose up -d
 | Outsourcing | 4 | Orders / Details / Material Flow + Time Range |
 
 All tool methods support natural language time expressions ("last week", "this month", "this year", etc.); the LLM automatically converts them to date ranges.
+
+#### Dynamic LLM Tool Management
+
+| Feature | Description |
+|---------|-------------|
+| Database definitions | `a_llm_tool` globally stores Tool name, description, input JSON Schema, SQL template, main table alias, result limit, and status |
+| Frontend management | The top-level Tool Management page supports create, edit, delete, enable/disable, refresh, and Tool call log viewing |
+| Runtime refresh | Saving, deleting, or changing status refreshes `ToolSnapshot`; subsequent LLM chats use the latest Tools |
+| Tenant isolation | Dynamic Tool definitions are global, but execution always reads the current `ent_code` and injects it into SQL conditions |
+| SQL safety | The first version only allows single-level read-only `SELECT`, uses bind variables, and rejects writes, DDL, multi-statements, complex query blocks, and unsafe aliases |
+| Call logs | `a_tool_call_log` records Tool source, arguments, status, duration, result count, error summary, and assistant message linkage |
+| Frontend display | Status and source are shown in Chinese labels while API values remain English enums: `active`/`inactive`, `code`/`database` |
+| Schema assistance | The input Schema editor provides JSON Schema guidance, parameter naming rules, and editable sample data |
+| Seed examples | Default demo data includes `query_dynamic_sales_orders` and `query_inventory_lot_location` |
 
 ### Document Management
 
@@ -270,21 +290,33 @@ Bean names come from each Spring AI starter's AutoConfiguration class. Historica
 com.example.rag
 ├── RagDemoApplication              # Application entry point
 ├── chat/                           # AI chat core
-│   ├── ChatController              # HTTP API (chat / docs / models / hints)
 │   ├── ErpAssistantService         # LLM chat + Tool Calling + RAG + multi-model routing
 │   ├── DocumentLoaderService       # Document ingestion into vector store
 │   └── ModelRegistry               # Multi-model registry (provider → ChatClient cache)
-├── conversation/                   # Chat history persistence
+├── controller/                     # HTTP controller entry points
+│   ├── ChatController              # Chat / docs / models / hints
 │   ├── ConversationController      # History API
+│   ├── BillingController / BillingManagementController
+│   ├── TenantManagementController
+│   └── ToolManagementController    # Dynamic Tool management and call log API
+├── conversation/                   # Chat history persistence
 │   ├── ChatHistoryService          # Conversation / message CRUD
 │   └── JdbcChatMemoryRepository    # Spring AI ChatMemory backed by JDBC
 ├── billing/                        # Billing
-│   ├── BillingController
+│   ├── BillingManagementService
 │   └── BillingService
 ├── tool/                           # ERP Tool Calling (8 modules)
 │   ├── BaseTool                    # Tenant isolation base class (auto-injects ent_code)
 │   ├── SalesTool / PurchaseTool / ProductionTool / QualityTool
 │   ├── WarehouseTool / FinanceTool / AfterSalesTool / OutsourcingTool
+│   ├── admin/                      # Dynamic Tool management service
+│   ├── dynamic/                    # SQL validation, binding, tenant injection, and execution
+│   ├── registry/                   # Tool snapshot registration and refresh
+│   └── trace/                      # Tool call logs and per-request aggregation
+├── dao/                            # MyBatis-Plus Entity / Mapper
+│   ├── entity/                     # Chat, billing, tenant, Tool definition, and Tool call log entities
+│   └── mapper/                     # ERP MySQL data access mappers
+├── init/                           # MySQL schema and demo data initialization
 ├── config/                         # Configuration
 │   ├── ModelProperties             # Multi-model YAML config binding
 │   ├── ChatModelConfig             # @Primary ChatModel declaration
@@ -293,5 +325,5 @@ com.example.rag
 │   ├── ContextPropagationConfig    # Reactor context propagation
 │   └── GlobalExceptionHandler
 └── vo/                             # Request / response objects
-    ├── ChatVO / ConversationVO / BillingVO / RespVO
+    ├── ChatVO / ConversationVO / BillingVO / AdminVO / RespVO
 ```

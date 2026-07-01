@@ -35,4 +35,15 @@ class TenantPropertiesTest {
 		assertThat(properties.isIgnoredTable(null)).isFalse();
 		assertThat(properties.isIgnoredTable(" ")).isFalse();
 	}
+
+	/**
+	 * 验证动态 Tool 定义表是全局表，调用日志表仍按租户隔离。
+	 */
+	@Test
+	public void shouldIgnoreLlmToolButNotToolCallLogByDefault() {
+		TenantProperties properties = new TenantProperties();
+
+		assertThat(properties.isIgnoredTable("a_llm_tool")).isTrue();
+		assertThat(properties.isIgnoredTable("a_tool_call_log")).isFalse();
+	}
 }

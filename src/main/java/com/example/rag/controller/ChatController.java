@@ -1,5 +1,7 @@
-package com.example.rag.chat;
+package com.example.rag.controller;
 
+import com.example.rag.chat.DocumentLoaderService;
+import com.example.rag.chat.ErpAssistantService;
 import com.example.rag.config.ModelProperties;
 import com.example.rag.vo.ChatVO;
 import com.example.rag.vo.RespVO;

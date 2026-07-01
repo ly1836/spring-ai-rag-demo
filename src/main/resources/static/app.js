@@ -16,6 +16,12 @@
  *   POST /api/billing/recharge     — 充值
  *   GET  /api/billing/usage/daily  — 每日用量
  *   GET  /api/billing/usage/monthly— 月度用量
+ *   GET  /api/admin/tools          — Tool 列表
+ *   POST /api/admin/tools          — 新增 Tool
+ *   PUT  /api/admin/tools          — 更新 Tool
+ *   DELETE /api/admin/tools/{id}   — 删除 Tool
+ *   POST /api/admin/tools/refresh  — 刷新 Tool 快照
+ *   GET  /api/admin/tools/call-logs— Tool 命中流水
  */
 
 const API = '/api';
@@ -37,6 +43,19 @@ let currentStreamController = null;
 let currentStreamBubble = null;
 /** 是否由用户主动终止当前流 */
 let isUserCancellingStream = false;
+/** 工具管理页当前加载的 Tool 列表 */
+let loadedTools = [];
+/** 新建 Tool 时给入参 Schema 提供可编辑的默认示例。 */
+const DEFAULT_TOOL_INPUT_SCHEMA = `{
+  "type": "object",
+  "properties": {
+    "customerName": {
+      "type": "string",
+      "description": "客户名称关键字，例如：华东客户"
+    }
+  },
+  "required": ["customerName"]
+}`;
 
 // ============================================================
 //  通用工具
@@ -188,6 +207,40 @@ async function apiPost(url, body) {
   });
 }
 
+/** PUT JSON 请求的快捷方式 */
+async function apiPut(url, body) {
+  return apiCall(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+}
+
+/** DELETE 请求的快捷方式 */
+async function apiDelete(url) {
+  return apiCall(url, { method: 'DELETE' });
+}
+
+/** 安全显示表格文本 */
+function safeText(value) {
+  if (value == null || value === '') return '-';
+  return escapeHtml(String(value));
+}
+
+/** 将 Tool 状态英文值转换为中文展示文案，前后端传输值仍保持英文。 */
+function formatToolStatus(status) {
+  if (status === 'active') return '启用';
+  if (status === 'inactive') return '停用';
+  return status || '-';
+}
+
+/** 将 Tool 来源英文值转换为中文展示文案，前后端传输值仍保持英文。 */
+function formatToolType(toolType) {
+  if (toolType === 'code') return '代码工具';
+  if (toolType === 'database') return '动态工具';
+  return toolType || '-';
+}
+
 // ============================================================
 //  Tab 导航
 // ============================================================
@@ -200,6 +253,7 @@ function switchTab(tab) {
 
   if (tab === 'history') loadConversations();
   if (tab === 'billing') { loadAccount(); loadPlans(); }
+  if (tab === 'tools') loadToolManagement();
 }
 
 // ============================================================
@@ -914,13 +968,190 @@ async function doRecharge() {
 function switchBillingTab(btn, panelId) {
   document.querySelectorAll('.billing-tab').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  document.querySelectorAll('.billing-content').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('#tabBilling .billing-content').forEach(p => p.style.display = 'none');
   document.getElementById(panelId).style.display = 'block';
 
   if (panelId === 'billingPlans') loadPlans();
   if (panelId === 'billingTransactions') loadTransactions();
   if (panelId === 'billingUsageDaily') loadDailyUsage();
   if (panelId === 'billingUsageMonthly') loadMonthlyUsage();
+}
+
+// ============================================================
+//  工具管理
+// ============================================================
+
+/** 加载工具管理页数据 */
+async function loadToolManagement() {
+  await Promise.all([loadToolDefinitions(), loadToolCallLogs()]);
+}
+
+/** 加载动态 Tool 定义列表 */
+async function loadToolDefinitions() {
+  const container = document.getElementById('toolList');
+  container.innerHTML = '<p class="placeholder-text">加载中...</p>';
+  try {
+    loadedTools = await apiCall(API + '/admin/tools');
+    renderToolDefinitions();
+  } catch (e) {
+    container.innerHTML = '<p style="color:var(--error);">' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+/** 渲染动态 Tool 定义表格 */
+function renderToolDefinitions() {
+  const container = document.getElementById('toolList');
+  if (!loadedTools.length) {
+    container.innerHTML = '<p class="placeholder-text">暂无 Tool</p>';
+    return;
+  }
+  container.innerHTML =
+    '<table class="data-table"><thead><tr>' +
+      '<th>名称</th><th>状态</th><th>别名</th><th>行数</th><th>更新时间</th><th>操作</th>' +
+    '</tr></thead><tbody>' +
+    loadedTools.map((tool, index) =>
+      '<tr>' +
+        '<td class="tool-name-cell">' + safeText(tool.toolName) + '</td>' +
+        '<td><span class="status-badge ' + escapeHtml(tool.status || 'inactive') + '">' + safeText(formatToolStatus(tool.status)) + '</span></td>' +
+        '<td>' + safeText(tool.tableAlias) + '</td>' +
+        '<td>' + safeText(tool.resultLimit) + '</td>' +
+        '<td>' + safeText(formatTime(tool.updatedAt || tool.createdAt)) + '</td>' +
+        '<td><div class="tool-actions">' +
+          '<button class="btn btn-outline btn-sm" onclick="editToolDefinition(' + index + ')">编辑</button>' +
+          '<button class="btn btn-outline btn-sm" onclick="deleteToolDefinition(' + index + ')">删除</button>' +
+        '</div></td>' +
+      '</tr>'
+    ).join('') + '</tbody></table>';
+}
+
+/** 将指定 Tool 填入编辑表单 */
+function editToolDefinition(index) {
+  const tool = loadedTools[index];
+  if (!tool) return;
+  document.getElementById('toolId').value = tool.id || '';
+  document.getElementById('toolName').value = tool.toolName || '';
+  document.getElementById('toolStatus').value = tool.status || 'active';
+  document.getElementById('toolTableAlias').value = tool.tableAlias || '';
+  document.getElementById('toolResultLimit').value = tool.resultLimit || 50;
+  document.getElementById('toolDesc').value = tool.toolDesc || '';
+  document.getElementById('toolInputSchema').value = tool.inputSchema || '';
+  document.getElementById('toolSqlTemplate').value = tool.sqlTemplate || '';
+  document.getElementById('toolRemark').value = tool.remark || '';
+}
+
+/** 清空 Tool 编辑表单 */
+function resetToolForm() {
+  document.getElementById('toolId').value = '';
+  document.getElementById('toolName').value = '';
+  document.getElementById('toolStatus').value = 'active';
+  document.getElementById('toolTableAlias').value = '';
+  document.getElementById('toolResultLimit').value = 50;
+  document.getElementById('toolDesc').value = '';
+  document.getElementById('toolInputSchema').value = DEFAULT_TOOL_INPUT_SCHEMA;
+  document.getElementById('toolSqlTemplate').value = '';
+  document.getElementById('toolRemark').value = '';
+}
+
+/** 从编辑表单读取 Tool 定义 */
+function readToolForm() {
+  const idValue = document.getElementById('toolId').value.trim();
+  return {
+    id: idValue ? Number(idValue) : null,
+    toolName: document.getElementById('toolName').value.trim(),
+    toolDesc: document.getElementById('toolDesc').value.trim(),
+    inputSchema: document.getElementById('toolInputSchema').value.trim(),
+    sqlTemplate: document.getElementById('toolSqlTemplate').value.trim(),
+    tableAlias: document.getElementById('toolTableAlias').value.trim() || null,
+    resultLimit: Number(document.getElementById('toolResultLimit').value || 50),
+    status: document.getElementById('toolStatus').value,
+    remark: document.getElementById('toolRemark').value.trim()
+  };
+}
+
+/** 保存动态 Tool 定义 */
+async function saveToolDefinition() {
+  const tool = readToolForm();
+  if (!tool.toolName || !tool.toolDesc || !tool.inputSchema || !tool.sqlTemplate) {
+    showToast('请补齐 Tool 名称、描述、Schema 和 SQL', 'error');
+    return;
+  }
+  try {
+    if (tool.id) {
+      await apiPut(API + '/admin/tools', tool);
+      showToast('Tool 已更新并刷新加载');
+    } else {
+      await apiPost(API + '/admin/tools', tool);
+      showToast('Tool 已新增并刷新加载');
+    }
+    resetToolForm();
+    await loadToolDefinitions();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+/** 删除动态 Tool 定义 */
+async function deleteToolDefinition(index) {
+  const tool = loadedTools[index];
+  if (!tool || !tool.id) return;
+  if (!confirm('确认删除 Tool：' + tool.toolName + '？')) return;
+  try {
+    await apiDelete(API + '/admin/tools/' + tool.id);
+    showToast('Tool 已删除并刷新加载');
+    await loadToolDefinitions();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+/** 手动刷新后端 Tool 快照 */
+async function refreshDynamicTools() {
+  try {
+    const data = await apiPost(API + '/admin/tools/refresh', {});
+    showToast('Tool 已刷新，版本 ' + data.version + '，数量 ' + data.toolCount);
+    await loadToolDefinitions();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+/** 加载当前租户的 Tool 命中流水 */
+async function loadToolCallLogs() {
+  const container = document.getElementById('toolCallLogs');
+  container.innerHTML = '<p class="placeholder-text">加载中...</p>';
+  try {
+    const data = await apiCall(API + '/admin/tools/call-logs?' + new URLSearchParams({ page: 0, size: 100 }));
+    if (!data.length) {
+      container.innerHTML = '<p class="placeholder-text">暂无命中流水</p>';
+      return;
+    }
+    container.innerHTML =
+      '<table class="data-table"><thead><tr>' +
+        '<th>时间</th><th>Tool</th><th>来源</th><th>模式</th><th>模型</th><th>状态</th><th>结果数</th><th>耗时</th><th>参数</th>' +
+      '</tr></thead><tbody>' +
+      data.map(log =>
+        '<tr>' +
+          '<td>' + safeText(formatTime(log.createdAt)) + '</td>' +
+          '<td class="tool-name-cell">' + safeText(log.toolName) + '</td>' +
+          '<td>' + safeText(formatToolType(log.toolType)) + '</td>' +
+          '<td>' + safeText(log.mode) + '</td>' +
+          '<td>' + safeText(log.model) + '</td>' +
+          '<td><span class="status-badge ' + escapeHtml(log.status || 'inactive') + '">' + safeText(log.status) + '</span></td>' +
+          '<td>' + safeText(log.resultCount) + '</td>' +
+          '<td>' + safeText(log.durationMs) + ' ms</td>' +
+          '<td>' + safeText(shortText(log.argumentsJson, 80)) + '</td>' +
+        '</tr>'
+      ).join('') + '</tbody></table>';
+  } catch (e) {
+    container.innerHTML = '<p style="color:var(--error);">' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+/** 截断表格中的长文本 */
+function shortText(value, maxLength) {
+  if (value == null) return '';
+  const text = String(value);
+  return text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
 }
 
 // ============================================================
@@ -947,6 +1178,7 @@ async function loadModels() {
 
 document.addEventListener('DOMContentLoaded', () => {
   initUpload();
+  resetToolForm();
   loadModels();
   loadHints();
 });

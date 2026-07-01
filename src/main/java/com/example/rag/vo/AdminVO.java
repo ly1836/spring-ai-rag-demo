@@ -95,4 +95,59 @@ public final class AdminVO {
 			String planCode, BigDecimal planFee, BigDecimal tokenUsageFee, BigDecimal totalAmount,
 			Long totalTokens, Integer totalRequests, String status, String paidAt) {
 	}
+
+	/**
+	 * LLM 动态 Tool 管理请求/响应。
+	 *
+	 * @param id          主键 ID
+	 * @param toolName    Tool 名称
+	 * @param toolDesc    Tool 描述
+	 * @param inputSchema 入参 JSON Schema
+	 * @param sqlTemplate SQL 模板
+	 * @param tableAlias  主表别名
+	 * @param resultLimit 返回行数上限
+	 * @param status      Tool 状态
+	 * @param remark      备注
+	 * @param createdAt   创建时间
+	 * @param updatedAt   更新时间
+	 */
+	public record ToolItem(Long id, String toolName, String toolDesc, String inputSchema,
+			String sqlTemplate, String tableAlias, Integer resultLimit, String status, String remark,
+			String createdAt, String updatedAt) {
+	}
+
+	/**
+	 * LLM Tool 命中流水响应。
+	 *
+	 * @param id            主键 ID
+	 * @param traceId       问答链路 ID
+	 * @param conversationId 会话 ID
+	 * @param messageId     助手消息 ID
+	 * @param entCode       租户编码
+	 * @param userId        用户 ID
+	 * @param mode          问答模式
+	 * @param model         使用模型
+	 * @param toolName      Tool 名称
+	 * @param toolType      Tool 来源
+	 * @param argumentsJson Tool 入参 JSON
+	 * @param resultCount   返回结果条数
+	 * @param durationMs    调用耗时
+	 * @param status        调用状态
+	 * @param errorMessage  错误信息
+	 * @param createdAt     创建时间
+	 */
+	public record ToolCallLogItem(Long id, String traceId, String conversationId, String messageId,
+			String entCode, String userId, String mode, String model, String toolName, String toolType,
+			String argumentsJson, Integer resultCount, Long durationMs, String status, String errorMessage,
+			String createdAt) {
+	}
+
+	/**
+	 * LLM Tool 刷新结果。
+	 *
+	 * @param version   Tool 快照版本号
+	 * @param toolCount 当前 Tool 数量
+	 */
+	public record ToolRefreshResult(Long version, Integer toolCount) {
+	}
 }

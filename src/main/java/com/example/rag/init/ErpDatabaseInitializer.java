@@ -55,6 +55,7 @@ public class ErpDatabaseInitializer implements ApplicationRunner {
 		entry("a_billing_account", List.of("ent_code")),
 		entry("a_billing_transaction", List.of("transaction_no")),
 		entry("a_billing_invoice", List.of("invoice_no")),
+		entry("a_llm_tool", List.of("tool_name")),
 		entry("b_sales_order", List.of("order_no")),
 		entry("b_sales_order_detail", List.of("order_no", "product_code", "product_name")),
 		entry("b_shipment", List.of("shipment_no")),

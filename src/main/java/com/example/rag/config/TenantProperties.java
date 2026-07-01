@@ -17,7 +17,8 @@ public class TenantProperties {
 
 	private String column = "ent_code";
 
-	private List<String> ignoreTables = new ArrayList<>(Arrays.asList("a_billing_plan", "a_billing_price_rule"));
+	private List<String> ignoreTables = new ArrayList<>(Arrays.asList("a_billing_plan", "a_billing_price_rule",
+		"a_llm_tool"));
 
 	public String getColumn() {
 		return column;

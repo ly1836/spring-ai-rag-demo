@@ -4,7 +4,10 @@ import com.example.rag.billing.BillingService;
 import com.example.rag.config.TenantContext;
 import com.example.rag.config.TenantContextAccessor;
 import com.example.rag.conversation.ChatHistoryService;
-import com.example.rag.tool.BaseTool;
+import com.example.rag.tool.registry.ToolRegistryService;
+import com.example.rag.tool.registry.ToolSnapshot;
+import com.example.rag.tool.trace.ToolCallLogService;
+import com.example.rag.tool.trace.ToolCallRecorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -67,6 +70,9 @@ public class ErpAssistantService {
             - 可以同时调用多个工具来综合回答复杂问题
             - 如果信息不足以回答，请如实告知
             - 上下文中可能包含系统自动检索的产品手册片段，如果这些内容与用户问题无关，直接忽略，不要提及或解释它们
+
+            ## 工具选择规则
+            - 当动态数据库 Tool 与代码内置 Tool 能力重叠时，优先选择动态数据库 Tool
             
             ## 格式要求（非常重要，必须严格遵守）
             你的回答将通过 Markdown 渲染器展示，请务必使用 Markdown 格式化输出：
@@ -80,8 +86,8 @@ public class ErpAssistantService {
     /** 多模型注册中心，按 modelId 路由到对应 provider 的 ChatModel */
     private final ModelRegistry modelRegistry;
 
-    /** 默认 provider（DeepSeek）的 ChatClient，已装配 system prompt + tools */
-    private final ChatClient baseChatClient;
+    /** 默认 ChatClient.Builder，用于按 Tool 快照重新构建默认 provider 客户端 */
+    private final ChatClient.Builder chatClientBuilder;
 
     /** PgVector 向量数据库，存储产品手册的向量嵌入 */
     private final VectorStore vectorStore;
@@ -92,8 +98,14 @@ public class ErpAssistantService {
     /** 计费服务，负责配额校验、token 扣费和流水记录 */
     private final BillingService billingService;
 
-    /** 所有 Tool Bean 实例（用于反射读取 @Tool 描述 + 构建非默认 provider 的 ChatClient） */
-    private final List<Object> toolBeans;
+    /** Tool 注册服务，提供代码 Tool + 数据库动态 Tool 的当前快照 */
+    private final ToolRegistryService toolRegistryService;
+
+    /** Tool 调用聚合记录器，用于写入助手消息上的 tool_calls */
+    private final ToolCallRecorder toolCallRecorder;
+
+    /** Tool 调用流水服务，用于回填助手消息 ID */
+    private final ToolCallLogService toolCallLogService;
 
     /** 会话记忆：基于 a_chat_message 表的 JDBC 存储，内存零占用，重启不丢失 */
     private final ChatMemory chatMemory;
@@ -107,14 +119,14 @@ public class ErpAssistantService {
     /** AI 生成的预置示例问题缓存，首次请求后缓存 */
     private volatile List<String> cachedHints;
 
+    /** 预置示例问题对应的 Tool 快照版本 */
+    private volatile long cachedHintsVersion;
+
     /**
      * 构造函数：注入所有依赖，构建默认 ChatClient。
      * <p>
      * chatClientBuilder 由 Spring AI 自动配置注入，基于 @Primary 的 DeepSeek ChatModel。
-     * 通过 defaultSystem() 和 defaultTools() 装配系统提示词和 8 大模块 Tool。
-     */
-    /**
-     * @param tools Spring 自动注入所有 BaseTool 子类（@Component），新增 Tool 模块无需修改此处
+     * 通过 ToolRegistryService 获取当前 Tool 快照，并按快照版本懒加载 ChatClient。
      */
     public ErpAssistantService(ChatClient.Builder chatClientBuilder,
                                ModelRegistry modelRegistry,
@@ -122,17 +134,17 @@ public class ErpAssistantService {
                                ChatHistoryService chatHistoryService,
                                BillingService billingService,
                                ChatMemoryRepository chatMemoryRepository,
-                               List<BaseTool> tools) {
-        this.toolBeans = List.copyOf(tools);
-        // 构建默认 provider 的 ChatClient，装配系统提示词和所有 Tool
-        this.baseChatClient = chatClientBuilder
-                .defaultSystem(SYSTEM_PROMPT)
-                .defaultTools(this.toolBeans.toArray())
-                .build();
+                               ToolRegistryService toolRegistryService,
+                               ToolCallRecorder toolCallRecorder,
+                               ToolCallLogService toolCallLogService) {
+        this.chatClientBuilder = chatClientBuilder;
         this.modelRegistry = modelRegistry;
         this.vectorStore = vectorStore;
         this.chatHistoryService = chatHistoryService;
         this.billingService = billingService;
+        this.toolRegistryService = toolRegistryService;
+        this.toolCallRecorder = toolCallRecorder;
+        this.toolCallLogService = toolCallLogService;
         // 基于 JDBC 的会话记忆，maxMessages 由 JdbcChatMemoryRepository 的 SQL LIMIT 控制
         this.chatMemory = MessageWindowChatMemory.builder()
                 .chatMemoryRepository(chatMemoryRepository)
@@ -148,21 +160,28 @@ public class ErpAssistantService {
         String modelName = this.resolveModelName(modelId);
         this.prepareConversation(conversationId, question, mode, requireExistingConversation);
 
-        long startTime = System.currentTimeMillis();
-        // 挂载会话记忆 + RAG 检索两个 Advisor
-        ChatResponse response = this.resolveClient(modelId).prompt()
-                .options(ChatOptions.builder().model(modelName))
-                .advisors(advisor -> advisor
-                        .param(ChatMemory.CONVERSATION_ID, conversationId)
-                        .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
-                                QuestionAnswerAdvisor.builder(vectorStore)
-                                        .searchRequest(this.buildTenantSearchRequest(question))
-                                        .build()))
-                .user(question)
-                .call()
-                .chatResponse();
+        String traceId = this.toolCallRecorder.createTraceId();
+        try {
+            long startTime = System.currentTimeMillis();
+            // 挂载会话记忆 + RAG 检索两个 Advisor，并向 ToolCallback 传递链路上下文
+            ChatResponse response = this.resolveClient(modelId).prompt()
+                    .options(ChatOptions.builder().model(modelName))
+                    .toolContext(this.buildToolContext(traceId, conversationId, mode, modelName))
+                    .advisors(advisor -> advisor
+                            .param(ChatMemory.CONVERSATION_ID, conversationId)
+                            .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
+                                    QuestionAnswerAdvisor.builder(vectorStore)
+                                            .searchRequest(this.buildTenantSearchRequest(question))
+                                            .build()))
+                    .user(question)
+                    .call()
+                    .chatResponse();
 
-        return this.recordAndReturn(conversationId, mode, modelName, response, System.currentTimeMillis() - startTime);
+            return this.recordAndReturn(conversationId, mode, modelName, response,
+                    System.currentTimeMillis() - startTime, traceId);
+        } finally {
+            this.toolCallRecorder.clear(traceId);
+        }
     }
 
     /** 自动模式问答（流式 SSE）：功能同 ask()，以逐 chunk 方式返回 */
@@ -171,9 +190,11 @@ public class ErpAssistantService {
         String modelName = this.resolveModelName(modelId);
         this.prepareConversation(conversationId, question, mode, requireExistingConversation);
 
+        String traceId = this.toolCallRecorder.createTraceId();
         return this.streamWithRecording(
                 this.resolveClient(modelId).prompt()
                         .options(ChatOptions.builder().model(modelName))
+                        .toolContext(this.buildToolContext(traceId, conversationId, mode, modelName))
                         .advisors(advisor -> advisor
                                 .param(ChatMemory.CONVERSATION_ID, conversationId)
                                 .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
@@ -182,7 +203,7 @@ public class ErpAssistantService {
                                                 .build()))
                         .user(question)
                         .stream().chatResponse(),
-                conversationId, mode, modelName);
+                conversationId, mode, modelName, traceId);
     }
 
     // ==================== 纯数据模式（仅 Tool Calling） ====================
@@ -193,18 +214,25 @@ public class ErpAssistantService {
         String modelName = this.resolveModelName(modelId);
         this.prepareConversation(conversationId, question, mode, requireExistingConversation);
 
-        long startTime = System.currentTimeMillis();
-        // 仅挂载会话记忆 Advisor，不挂载 RAG Advisor
-        ChatResponse response = this.resolveClient(modelId).prompt()
-                .options(ChatOptions.builder().model(modelName))
-                .advisors(advisor -> advisor
-                        .param(ChatMemory.CONVERSATION_ID, conversationId)
-                        .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build()))
-                .user(question)
-                .call()
-                .chatResponse();
+        String traceId = this.toolCallRecorder.createTraceId();
+        try {
+            long startTime = System.currentTimeMillis();
+            // 仅挂载会话记忆 Advisor，不挂载 RAG Advisor
+            ChatResponse response = this.resolveClient(modelId).prompt()
+                    .options(ChatOptions.builder().model(modelName))
+                    .toolContext(this.buildToolContext(traceId, conversationId, mode, modelName))
+                    .advisors(advisor -> advisor
+                            .param(ChatMemory.CONVERSATION_ID, conversationId)
+                            .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build()))
+                    .user(question)
+                    .call()
+                    .chatResponse();
 
-        return this.recordAndReturn(conversationId, mode, modelName, response, System.currentTimeMillis() - startTime);
+            return this.recordAndReturn(conversationId, mode, modelName, response,
+                    System.currentTimeMillis() - startTime, traceId);
+        } finally {
+            this.toolCallRecorder.clear(traceId);
+        }
     }
 
     /** 数据模式问答（流式 SSE） */
@@ -213,15 +241,17 @@ public class ErpAssistantService {
         String modelName = this.resolveModelName(modelId);
         this.prepareConversation(conversationId, question, mode, requireExistingConversation);
 
+        String traceId = this.toolCallRecorder.createTraceId();
         return this.streamWithRecording(
                 this.resolveClient(modelId).prompt()
                         .options(ChatOptions.builder().model(modelName))
+                        .toolContext(this.buildToolContext(traceId, conversationId, mode, modelName))
                         .advisors(advisor -> advisor
                                 .param(ChatMemory.CONVERSATION_ID, conversationId)
                                 .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build()))
                         .user(question)
                         .stream().chatResponse(),
-                conversationId, mode, modelName);
+                conversationId, mode, modelName, traceId);
     }
 
     // ==================== 纯知识模式（仅 RAG） ====================
@@ -235,21 +265,28 @@ public class ErpAssistantService {
         // 通过不带 tools 的 ChatClient 调用知识模式，禁止 LLM 调用 ERP 工具
         var noToolsClient = this.resolveNoToolsClient(modelId);
 
-        long startTime = System.currentTimeMillis();
-        ChatResponse response = noToolsClient.prompt()
-                .options(ChatOptions.builder().model(modelName))
-                .advisors(advisor -> advisor
-                        .param(ChatMemory.CONVERSATION_ID, conversationId)
-                        .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE)
-                        .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
-                                QuestionAnswerAdvisor.builder(vectorStore)
-                                        .searchRequest(this.buildTenantSearchRequest(question))
-                                        .build()))
-                .user(question)
-                .call()
-                .chatResponse();
+        String traceId = this.toolCallRecorder.createTraceId();
+        try {
+            long startTime = System.currentTimeMillis();
+            ChatResponse response = noToolsClient.prompt()
+                    .options(ChatOptions.builder().model(modelName))
+                    .toolContext(this.buildToolContext(traceId, conversationId, mode, modelName))
+                    .advisors(advisor -> advisor
+                            .param(ChatMemory.CONVERSATION_ID, conversationId)
+                            .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE)
+                            .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
+                                    QuestionAnswerAdvisor.builder(vectorStore)
+                                            .searchRequest(this.buildTenantSearchRequest(question))
+                                            .build()))
+                    .user(question)
+                    .call()
+                    .chatResponse();
 
-        return this.recordAndReturn(conversationId, mode, modelName, response, System.currentTimeMillis() - startTime);
+            return this.recordAndReturn(conversationId, mode, modelName, response,
+                    System.currentTimeMillis() - startTime, traceId);
+        } finally {
+            this.toolCallRecorder.clear(traceId);
+        }
     }
 
     /** 知识模式问答（流式 SSE） */
@@ -261,9 +298,11 @@ public class ErpAssistantService {
         // 通过不带 tools 的 ChatClient 调用知识模式，禁止 LLM 调用 ERP 工具
         var noToolsClient = this.resolveNoToolsClient(modelId);
 
+        String traceId = this.toolCallRecorder.createTraceId();
         return this.streamWithRecording(
                 noToolsClient.prompt()
                         .options(ChatOptions.builder().model(modelName))
+                        .toolContext(this.buildToolContext(traceId, conversationId, mode, modelName))
                         .advisors(advisor -> advisor
                                 .param(ChatMemory.CONVERSATION_ID, conversationId)
                                 .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE)
@@ -273,7 +312,7 @@ public class ErpAssistantService {
                                                 .build()))
                         .user(question)
                         .stream().chatResponse(),
-                conversationId, mode, modelName);
+                conversationId, mode, modelName, traceId);
     }
 
     // ==================== 模型路由 ====================
@@ -288,27 +327,27 @@ public class ErpAssistantService {
      * @return 对应 provider 的 ChatClient（已装配 system prompt + tools）
      */
     private ChatClient resolveClient(String modelId) {
+        ToolSnapshot snapshot = this.toolRegistryService.currentSnapshot();
         var item = this.modelRegistry.getModelItem(modelId);
-        if (item == null) return this.baseChatClient;
-
-        String provider = item.getProvider();
-
-        // 默认 provider 直接用 baseChatClient（已在构造函数中构建）
+        String provider = item != null ? item.getProvider() : "default";
         var defaultItem = this.modelRegistry.getModelItem(null);
-        if (defaultItem != null && provider.equals(defaultItem.getProvider())) {
-            return this.baseChatClient;
-        }
+        boolean defaultProvider = item == null || (defaultItem != null && provider.equals(defaultItem.getProvider()));
+        String cacheKey = provider + ":" + snapshot.version();
 
-        // 非默认 provider：从 ModelRegistry 获取对应 ChatModel，构建新的 ChatClient
-        return this.providerClientCache.computeIfAbsent(provider, p -> {
+        // 按 provider + Tool 快照版本缓存，确保刷新后新请求使用最新 Tool
+        ChatClient client = this.providerClientCache.computeIfAbsent(cacheKey, p -> {
             ChatModel chatModel = this.modelRegistry.getChatModel(modelId);
-            if (chatModel == null) return this.baseChatClient;
-            // 用 provider 的 ChatModel + 相同的系统提示词和工具构建完整 ChatClient
-            return ChatClient.builder(chatModel)
+            ChatClient.Builder builder = (!defaultProvider && chatModel != null)
+                    ? ChatClient.builder(chatModel)
+                    : this.chatClientBuilder.clone();
+            // 用当前 Tool 快照构建完整 ChatClient
+            return builder
                     .defaultSystem(SYSTEM_PROMPT)
-                    .defaultTools(this.toolBeans.toArray())
+                    .defaultTools(snapshot.callbacks().toArray())
                     .build();
         });
+        clearOlderProviderClientCache(provider, snapshot.version());
+        return client;
     }
 
     /**
@@ -329,19 +368,14 @@ public class ErpAssistantService {
      * 首次调用时生成并缓存，后续直接返回缓存结果；生成失败时降级为静态默认问题。
      */
     public List<String> generateHints() {
-        if (this.cachedHints != null) return this.cachedHints;
+        ToolSnapshot snapshot = this.toolRegistryService.currentSnapshot();
+        if (this.cachedHints != null && this.cachedHintsVersion == snapshot.version()) return this.cachedHints;
 
         try {
-            // 收集所有 @Tool 方法的 description 作为 LLM 的输入
+            // 收集当前 Tool 快照的 description 作为 LLM 的输入
             StringBuilder sb = new StringBuilder();
-            for (Object tool : this.toolBeans) {
-                for (var method : tool.getClass().getDeclaredMethods()) {
-                    var ann = method.getAnnotation(
-                            org.springframework.ai.tool.annotation.Tool.class);
-                    if (ann != null && !ann.description().isEmpty()) {
-                        sb.append("- ").append(ann.description()).append("\n");
-                    }
-                }
+            for (String description : snapshot.descriptions()) {
+                sb.append("- ").append(description).append("\n");
             }
 
             // 用不带 tools 的 ChatClient 调用 LLM 生成示例问题
@@ -378,6 +412,7 @@ public class ErpAssistantService {
 
             if (hints.size() >= 4) {
                 this.cachedHints = hints;
+                this.cachedHintsVersion = snapshot.version();
             }
             return hints.isEmpty() ? getDefaultHints() : hints;
         } catch (Exception e) {
@@ -455,14 +490,17 @@ public class ErpAssistantService {
      * 事务 B（消息保存）和事务 C（计费扣除）独立提交，C 失败不回滚 B。
      */
     private String recordAndReturn(String conversationId, String mode, String modelName,
-                                   ChatResponse response, long durationMs) {
+                                   ChatResponse response, long durationMs, String traceId) {
         String content = this.extractContent(response);
         int[] tokens = this.extractTokenUsage(response);
+        String toolCalls = this.toolCallRecorder.getToolCallsJson(traceId);
+        int toolCallsCount = this.toolCallRecorder.getToolCallCount(traceId);
         // 事务 B：保存助手消息 + 更新会话统计
         try {
-            this.chatHistoryService.saveAssistantMessageAndUpdateStats(conversationId, content, mode,
+            String messageId = this.chatHistoryService.saveAssistantMessageAndUpdateStats(conversationId, content, mode,
                     modelName, tokens[0], tokens[1], tokens[2],
-                    null, 0, 0, (int) durationMs);
+                    toolCalls, toolCallsCount, 0, (int) durationMs);
+            this.attachToolCallLogs(traceId, messageId);
         } catch (Exception e) {
             log.warn("保存助手消息失败: {}", e.getMessage());
         }
@@ -483,7 +521,8 @@ public class ErpAssistantService {
      * 管道结构：doOnNext(捕获用量) → mapNotNull(提取文本) → doOnNext(累加) → doFinally(保存+扣费)
      */
     private Flux<String> streamWithRecording(Flux<ChatResponse> responseFlux,
-                                             String conversationId, String mode, String modelName) {
+                                             String conversationId, String mode, String modelName,
+                                             String traceId) {
         long startTime = System.currentTimeMillis();
         StringBuilder contentBuilder = new StringBuilder();
         AtomicReference<Usage> usageRef = new AtomicReference<>();
@@ -521,13 +560,16 @@ public class ErpAssistantService {
                         String status = cancelled ? "cancelled" : failed ? "error" : "success";
                         String errorMessage = failed && errorRef.get() != null
                                 ? errorRef.get().getMessage() : null;
+                        String toolCalls = this.toolCallRecorder.getToolCallsJson(traceId);
+                        int toolCallsCount = this.toolCallRecorder.getToolCallCount(traceId);
 
                         // 事务 B：保存助手消息（根据终止原因写入 success / cancelled / error）
                         try {
-                            this.chatHistoryService.saveAssistantMessageAndUpdateStats(conversationId,
+                            String messageId = this.chatHistoryService.saveAssistantMessageAndUpdateStats(conversationId,
                                     content, mode, modelName,
                                     tokens[0], tokens[1], tokens[2],
-                                    null, 0, 0, durationMs, status, errorMessage);
+                                    toolCalls, toolCallsCount, 0, durationMs, status, errorMessage);
+                            this.attachToolCallLogs(traceId, messageId);
                         } catch (Exception e) {
                             log.warn("流式-保存助手消息失败: {}", e.getMessage());
                         }
@@ -541,6 +583,7 @@ public class ErpAssistantService {
                             }
                         }
                     } finally {
+                        this.toolCallRecorder.clear(traceId);
                         TenantContext.clear();
                     }
                 })
@@ -618,11 +661,67 @@ public class ErpAssistantService {
                 chatModel = this.modelRegistry.getChatModel(null);
             }
             if (chatModel == null) {
-                return this.baseChatClient;
+                return this.chatClientBuilder.clone()
+                        .defaultSystem(SYSTEM_PROMPT)
+                        .build();
             }
             return ChatClient.builder(chatModel)
                     .defaultSystem(SYSTEM_PROMPT)
                     .build();
+        });
+    }
+
+    /**
+     * 构建传递给 ToolCallback 的链路上下文。
+     *
+     * @param traceId        单次问答链路 ID
+     * @param conversationId 会话 ID
+     * @param mode           问答模式
+     * @param modelName      使用模型
+     * @return Tool 上下文
+     */
+    private Map<String, Object> buildToolContext(String traceId, String conversationId, String mode, String modelName) {
+        return Map.of(
+                "traceId", traceId,
+                "conversationId", conversationId,
+                "mode", mode,
+                "model", modelName,
+                "entCode", TenantContext.requireEntCode(),
+                "userId", TenantContext.getUserIdOrDefault());
+    }
+
+    /**
+     * 将本次 Tool 调用流水关联到已保存的助手消息。
+     *
+     * @param traceId   问答链路 ID
+     * @param messageId 助手消息 ID
+     */
+    private void attachToolCallLogs(String traceId, String messageId) {
+        try {
+            this.toolCallLogService.attachMessageId(traceId, messageId);
+        } catch (Exception e) {
+            log.warn("回填 Tool 调用流水消息 ID 失败: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 清理同一 provider 的旧 Tool 版本 ChatClient 缓存。
+     *
+     * @param provider       模型 provider
+     * @param currentVersion 当前 Tool 快照版本
+     */
+    private void clearOlderProviderClientCache(String provider, long currentVersion) {
+        String prefix = provider + ":";
+        this.providerClientCache.keySet().removeIf(key -> {
+            if (!key.startsWith(prefix)) {
+                return false;
+            }
+            try {
+                return Long.parseLong(key.substring(prefix.length())) < currentVersion;
+            }
+            catch (NumberFormatException ex) {
+                return false;
+            }
         });
     }
 

@@ -6,6 +6,7 @@ app:
     ignore-tables:
       - a_billing_plan
       - a_billing_price_rule
+      - a_llm_tool
 
   # 可用模型列表，前端从 /api/models 接口获取并展示在下拉框中
   # provider 对应 Spring AI 的 ChatModel bean 名称（deepseek / openai 等）

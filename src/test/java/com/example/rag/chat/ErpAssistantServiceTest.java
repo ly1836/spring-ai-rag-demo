@@ -1,12 +1,17 @@
 package com.example.rag.chat;
 
 import java.util.List;
+import java.util.Map;
 
 import com.example.rag.billing.BillingService;
 import com.example.rag.config.ModelProperties.ModelItem;
 import com.example.rag.config.TenantContext;
 import com.example.rag.conversation.ChatHistoryService;
 import com.example.rag.tool.BaseTool;
+import com.example.rag.tool.registry.ToolRegistryService;
+import com.example.rag.tool.registry.ToolSnapshot;
+import com.example.rag.tool.trace.ToolCallLogService;
+import com.example.rag.tool.trace.ToolCallRecorder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -25,9 +30,13 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -63,11 +72,18 @@ class ErpAssistantServiceTest {
 		ChatHistoryService historyService = mock(ChatHistoryService.class);
 		BillingService billingService = mock(BillingService.class);
 		ChatMemoryRepository chatMemoryRepository = mock(ChatMemoryRepository.class);
+		ToolRegistryService toolRegistryService = mock(ToolRegistryService.class);
+		ToolCallRecorder toolCallRecorder = new ToolCallRecorder();
+		ToolCallLogService toolCallLogService = mock(ToolCallLogService.class);
 		when(chatMemoryRepository.findByConversationId("c1")).thenReturn(List.of(
 			new UserMessage("上一问"),
 			new AssistantMessage("上一答")));
+		when(historyService.saveAssistantMessageAndUpdateStats(eq("c1"), anyString(), eq("knowledge"),
+			eq("deepseek-chat"), anyInt(), anyInt(), anyInt(), any(), anyInt(), anyInt(), any()))
+			.thenReturn("assistant-msg");
 		ErpAssistantService service = new ErpAssistantService(ChatClient.builder(chatModel), modelRegistry,
-			vectorStore, historyService, billingService, chatMemoryRepository, List.of(new TestTool()));
+			vectorStore, historyService, billingService, chatMemoryRepository, toolRegistryService, toolCallRecorder,
+			toolCallLogService);
 		TenantContext.setEntCode("ENT001");
 
 		String answer = service.askKnowledge("当前问题", "c1", "deepseek-chat", true);
@@ -80,7 +96,84 @@ class ErpAssistantServiceTest {
 		assertThat(options.getToolCallbacks()).isNullOrEmpty();
 		verify(chatMemoryRepository, atLeastOnce()).findByConversationId("c1");
 		verify(historyService).initConversationAndSaveUserMessage("c1", "当前问题", "knowledge");
+		verify(toolCallLogService).attachMessageId(anyString(), eq("assistant-msg"));
 		verify(billingService).checkQuota();
+	}
+
+	/**
+	 * 验证 Tool 快照刷新后只保留当前版本的带 Tool ChatClient 缓存。
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void shouldKeepOnlyCurrentToolVersionClientCache() {
+		CapturingChatModel chatModel = new CapturingChatModel();
+		ModelRegistry modelRegistry = mock(ModelRegistry.class);
+		ModelItem defaultItem = model("deepseek-chat", "deepseek", "deepseek-chat", true);
+		when(modelRegistry.getModelItem("deepseek-chat")).thenReturn(defaultItem);
+		when(modelRegistry.getModelItem(null)).thenReturn(defaultItem);
+		when(modelRegistry.getChatModel("deepseek-chat")).thenReturn(chatModel);
+		when(modelRegistry.getDefaultModelName()).thenReturn("deepseek-chat");
+		VectorStore vectorStore = mock(VectorStore.class);
+		ChatHistoryService historyService = mock(ChatHistoryService.class);
+		BillingService billingService = mock(BillingService.class);
+		ChatMemoryRepository chatMemoryRepository = mock(ChatMemoryRepository.class);
+		ToolRegistryService toolRegistryService = mock(ToolRegistryService.class);
+		when(toolRegistryService.currentSnapshot()).thenReturn(
+			new ToolSnapshot(1L, List.of(), List.of()),
+			new ToolSnapshot(2L, List.of(), List.of()));
+		ToolCallRecorder toolCallRecorder = new ToolCallRecorder();
+		ToolCallLogService toolCallLogService = mock(ToolCallLogService.class);
+		when(historyService.saveAssistantMessageAndUpdateStats(eq("c1"), anyString(), eq("data"),
+			eq("deepseek-chat"), anyInt(), anyInt(), anyInt(), any(), anyInt(), anyInt(), any()))
+			.thenReturn("assistant-msg");
+		ErpAssistantService service = new ErpAssistantService(ChatClient.builder(chatModel), modelRegistry,
+			vectorStore, historyService, billingService, chatMemoryRepository, toolRegistryService, toolCallRecorder,
+			toolCallLogService);
+		TenantContext.setEntCode("ENT001");
+
+		service.askData("查订单", "c1", "deepseek-chat", false);
+		service.askData("查订单", "c1", "deepseek-chat", false);
+
+		Map<String, ChatClient> cache =
+			(Map<String, ChatClient>) ReflectionTestUtils.getField(service, "providerClientCache");
+		assertThat(cache).containsOnlyKeys("deepseek:2");
+	}
+
+	/**
+	 * 验证系统提示仅保留动态 Tool 的通用优先级，不绑定具体业务 Tool。
+	 */
+	@Test
+	public void shouldPreferDynamicToolGenerallyInSystemPrompt() {
+		CapturingChatModel chatModel = new CapturingChatModel();
+		ModelRegistry modelRegistry = mock(ModelRegistry.class);
+		ModelItem defaultItem = model("deepseek-chat", "deepseek", "deepseek-chat", true);
+		when(modelRegistry.getModelItem("deepseek-chat")).thenReturn(defaultItem);
+		when(modelRegistry.getModelItem(null)).thenReturn(defaultItem);
+		when(modelRegistry.getChatModel("deepseek-chat")).thenReturn(chatModel);
+		when(modelRegistry.getDefaultModelName()).thenReturn("deepseek-chat");
+		VectorStore vectorStore = mock(VectorStore.class);
+		ChatHistoryService historyService = mock(ChatHistoryService.class);
+		BillingService billingService = mock(BillingService.class);
+		ChatMemoryRepository chatMemoryRepository = mock(ChatMemoryRepository.class);
+		ToolRegistryService toolRegistryService = mock(ToolRegistryService.class);
+		when(toolRegistryService.currentSnapshot()).thenReturn(new ToolSnapshot(1L, List.of(), List.of()));
+		ToolCallRecorder toolCallRecorder = new ToolCallRecorder();
+		ToolCallLogService toolCallLogService = mock(ToolCallLogService.class);
+		when(historyService.saveAssistantMessageAndUpdateStats(eq("c1"), anyString(), eq("data"),
+			eq("deepseek-chat"), anyInt(), anyInt(), anyInt(), any(), anyInt(), anyInt(), any()))
+			.thenReturn("assistant-msg");
+		ErpAssistantService service = new ErpAssistantService(ChatClient.builder(chatModel), modelRegistry,
+			vectorStore, historyService, billingService, chatMemoryRepository, toolRegistryService, toolCallRecorder,
+			toolCallLogService);
+		TenantContext.setEntCode("ENT001");
+
+		service.askData("按客户名称为张三电子科技有限公司查询销售订单列表", "c1", "deepseek-chat", false);
+
+		assertThat(chatModel.lastPrompt.getInstructions().toString())
+			.contains("当动态数据库 Tool 与代码内置 Tool 能力重叠时，优先选择动态数据库 Tool")
+			.doesNotContain("query_dynamic_sales_orders")
+			.doesNotContain("getRecentSalesOrders")
+			.doesNotContain("getSalesOrders 是代码内置兼容工具");
 	}
 
 	/**

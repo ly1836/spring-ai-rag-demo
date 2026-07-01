@@ -2,6 +2,7 @@ package com.example.rag.chat;
 
 import java.util.List;
 
+import com.example.rag.controller.ChatController;
 import com.example.rag.config.ModelProperties;
 import com.example.rag.config.ModelProperties.ModelItem;
 import com.example.rag.vo.ChatVO;
