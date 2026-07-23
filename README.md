@@ -58,7 +58,7 @@ docker run -d \
 docker run -d \
   --name mysql-erp \
   -p 13306:3306 \
-  -e MYSQL_ROOT_PASSWORD=mm#20250912 \
+  -e MYSQL_ROOT_PASSWORD="你的mysql密码" \
   -e MYSQL_DATABASE=erp \
   -e MYSQL_CHARSET=utf8mb4 \
   mysql:8.0 \
@@ -109,7 +109,7 @@ docker run -d --name rag-demo \
   -e SPRING_DATASOURCE_PGVECTOR_PASSWORD=postgres \
   -e SPRING_DATASOURCE_ERP_URL=jdbc:mysql://host.docker.internal:13306/erp?useSSL=false\&serverTimezone=Asia/Shanghai\&characterEncoding=utf8\&allowPublicKeyRetrieval=true \
   -e SPRING_DATASOURCE_ERP_USERNAME=root \
-  -e SPRING_DATASOURCE_ERP_PASSWORD=mm#20250912 \
+  -e SPRING_DATASOURCE_ERP_PASSWORD="你的mysql密码" \
   -e DEEPSEEK_API_KEY=你的DeepSeekKey \
   -e DASHSCOPE_API_KEY=你的DashScopeKey \
   -e GOOGLE_GENAI_API_KEY=你的GeminiKey \
@@ -129,7 +129,7 @@ docker run -d --name rag-demo \
 export DEEPSEEK_API_KEY=你的DeepSeekKey
 export DASHSCOPE_API_KEY=你的DashScopeKey
 export GOOGLE_GENAI_API_KEY=你的GeminiKey
-export ERP_DB_PASSWORD=mm#20250912
+export ERP_DB_PASSWORD="你的mysql密码"
 
 docker compose up -d
 ```
@@ -139,7 +139,7 @@ docker compose up -d
 $env:DEEPSEEK_API_KEY="你的DeepSeekKey"
 $env:DASHSCOPE_API_KEY="你的DashScopeKey"
 $env:GOOGLE_GENAI_API_KEY="你的GeminiKey"
-$env:ERP_DB_PASSWORD="mm#20250912"
+$env:ERP_DB_PASSWORD=""你的mysql密码""
 
 docker compose up -d
 ```
@@ -157,7 +157,7 @@ DASHSCOPE_API_KEY=你的DashScopeKey
 GOOGLE_GENAI_API_KEY=你的GeminiKey
 
 # 可选：MySQL root 密码，同时会传给应用的 ERP 数据源
-ERP_DB_PASSWORD=mm#20250912
+ERP_DB_PASSWORD="你的mysql密码"
 ```
 
 已设置环境变量或 `.env` 后，也可以单独执行启动命令：
