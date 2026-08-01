@@ -11,7 +11,7 @@ services:
       SPRING_DATASOURCE_PGVECTOR_PASSWORD: postgres
       SPRING_DATASOURCE_ERP_URL: jdbc:mysql://mysql:3306/erp?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8&allowPublicKeyRetrieval=true
       SPRING_DATASOURCE_ERP_USERNAME: root
-      SPRING_DATASOURCE_ERP_PASSWORD: ${ERP_DB_PASSWORD:-mm#20250912}
+      SPRING_DATASOURCE_ERP_PASSWORD: ${ERP_DB_PASSWORD:-admin}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-sk-your-deepseek-key}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-sk-your-dashscope-key}
       GOOGLE_GENAI_API_KEY: ${GOOGLE_GENAI_API_KEY:-your-google-genai-key}
@@ -48,7 +48,7 @@ services:
     ports:
       - "13306:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: ${ERP_DB_PASSWORD:-mm#20250912}
+      MYSQL_ROOT_PASSWORD: ${ERP_DB_PASSWORD:-admin}
       MYSQL_DATABASE: erp
       MYSQL_CHARSET: utf8mb4
     volumes:
