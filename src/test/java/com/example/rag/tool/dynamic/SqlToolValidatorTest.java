@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 import com.example.rag.dao.entity.LlmToolEntity;
+import com.example.rag.tool.ToolNames;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -142,6 +143,18 @@ public class SqlToolValidatorTest {
 		tool.setTableAlias(tableAlias);
 		tool.setResultLimit(50);
 		return tool;
+	}
+
+	/**
+	 * 验证动态 Tool 不得占用内部图表规划 Tool 的系统保留名称。
+	 */
+	@Test
+	public void shouldRejectReservedChartPlanningToolName() {
+		SqlToolValidator validator = new SqlToolValidator();
+
+		assertThatThrownBy(() -> validator.validateToolName(ToolNames.CHART_PLAN))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("Tool 名称为系统保留名称");
 	}
 
 }

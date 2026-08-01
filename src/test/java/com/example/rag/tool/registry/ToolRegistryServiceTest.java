@@ -7,6 +7,8 @@ import static org.mockito.Mockito.when;
 import java.util.List;
 import java.util.Map;
 
+import com.example.rag.chat.chart.capture.ToolResultRecorder;
+import com.example.rag.chat.chart.tool.ChartPlanToolCallback;
 import com.example.rag.dao.entity.LlmToolEntity;
 import com.example.rag.dao.mapper.LlmToolMapper;
 import com.example.rag.tool.BaseTool;
@@ -36,7 +38,7 @@ public class ToolRegistryServiceTest {
 		LlmToolEntity invalidTool = buildTool("query_invalid_order", "UPDATE b_sales_order SET status = 1");
 		when(llmToolMapper.selectActiveTools()).thenReturn(List.of(validTool, invalidTool));
 		ToolRegistryService service = new ToolRegistryService(List.of(), llmToolMapper, factory, recorder,
-			logService, new SqlToolValidator());
+			logService, new SqlToolValidator(), new ToolResultRecorder());
 
 		ToolSnapshot snapshot = service.refresh();
 
@@ -57,7 +59,7 @@ public class ToolRegistryServiceTest {
 		LlmToolEntity secondTool = buildTool("query_duplicate_order", "SELECT * FROM b_purchase_order");
 		when(llmToolMapper.selectActiveTools()).thenReturn(List.of(firstTool, secondTool));
 		ToolRegistryService service = new ToolRegistryService(List.of(), llmToolMapper, factory, recorder,
-			logService, new SqlToolValidator());
+			logService, new SqlToolValidator(), new ToolResultRecorder());
 
 		ToolSnapshot snapshot = service.refresh();
 
@@ -77,7 +79,7 @@ public class ToolRegistryServiceTest {
 		LlmToolEntity databaseTool = buildTool("query_dynamic_sales_orders", "SELECT * FROM b_sales_order");
 		when(llmToolMapper.selectActiveTools()).thenReturn(List.of(databaseTool));
 		ToolRegistryService service = new ToolRegistryService(List.of(new TestSalesTool()), llmToolMapper, factory,
-			recorder, logService, new SqlToolValidator());
+			recorder, logService, new SqlToolValidator(), new ToolResultRecorder());
 
 		ToolSnapshot snapshot = service.refresh();
 
@@ -130,6 +132,24 @@ public class ToolRegistryServiceTest {
 			return List.of();
 		}
 
+	}
+
+	/**
+	 * 验证内部图表规划 Tool 不会进入业务 Tool 快照和统计范围。
+	 */
+	@Test
+	public void shouldExcludeChartPlanningToolFromBusinessSnapshot() {
+		LlmToolMapper llmToolMapper = mock(LlmToolMapper.class);
+		when(llmToolMapper.selectActiveTools()).thenReturn(List.of());
+		ToolRegistryService service = new ToolRegistryService(List.of(new TestSalesTool()), llmToolMapper,
+			new DatabaseToolCallbackFactory(mock(DatabaseToolExecutor.class)), new ToolCallRecorder(),
+			mock(ToolCallLogService.class), new SqlToolValidator(), new ToolResultRecorder());
+
+		ToolSnapshot snapshot = service.refresh();
+
+		assertThat(snapshot.callbacks()).extracting(callback -> callback.getToolDefinition().name())
+			.containsExactly("getSalesOrders")
+			.doesNotContain(ChartPlanToolCallback.TOOL_NAME);
 	}
 
 }

@@ -14,9 +14,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -120,6 +122,57 @@ class ErpDatabaseInitializerTest {
 			.contains("b_inventory i")
 			.contains("'i'")
 			.contains("动态 Tool 示例：按库存批次号查询仓库库位");
+	}
+
+	/**
+	 * 验证旧数据库缺少图表字段时会执行幂等升级。
+	 */
+	@Test
+	public void shouldAddChartSpecColumnForExistingDatabase() {
+		ByteArrayResource emptyScript = new ByteArrayResource(new byte[0]);
+		when(resourceLoader.getResource("classpath:db/init/conversation-billing-schema.sql"))
+			.thenReturn(emptyScript);
+		when(resourceLoader.getResource("classpath:db/init/business-data.sql"))
+			.thenReturn(emptyScript);
+		when(erpJdbcTemplate.queryForObject(contains("information_schema.COLUMNS"), eq(Integer.class),
+			eq("a_chat_message"), eq("chart_spec"))).thenReturn(0);
+
+		initializer.initialize();
+
+		verify(erpJdbcTemplate).execute("ALTER TABLE a_chat_message ADD COLUMN chart_spec TEXT NULL "
+			+ "COMMENT '助手图表数据（ChartSpec JSON，最大60KiB）' AFTER tool_calls_count");
+	}
+
+	/**
+	 * 验证新数据库初始化脚本包含图表字段。
+	 */
+	@Test
+	public void shouldContainChartSpecColumnInBundledSchema() throws Exception {
+		String script = Files.readString(Path.of("src/main/resources/db/init/conversation-billing-schema.sql"),
+			StandardCharsets.UTF_8);
+
+		assertThat(script).contains("chart_spec          TEXT");
+	}
+
+	/**
+	 * 验证重复启动时不会重复增加已存在的图表字段。
+	 */
+	@Test
+	public void shouldNotRepeatChartSpecMigrationAcrossRestarts() {
+		ByteArrayResource emptyScript = new ByteArrayResource(new byte[0]);
+		when(resourceLoader.getResource("classpath:db/init/conversation-billing-schema.sql"))
+			.thenReturn(emptyScript);
+		when(resourceLoader.getResource("classpath:db/init/business-data.sql"))
+			.thenReturn(emptyScript);
+		when(erpJdbcTemplate.queryForObject(contains("information_schema.COLUMNS"), eq(Integer.class),
+			eq("a_chat_message"), eq("chart_spec"))).thenReturn(1);
+
+		initializer.initialize();
+		initializer.initialize();
+
+		verify(erpJdbcTemplate, times(2)).queryForObject(contains("information_schema.COLUMNS"), eq(Integer.class),
+			eq("a_chat_message"), eq("chart_spec"));
+		verify(erpJdbcTemplate, never()).execute(contains("ALTER TABLE a_chat_message ADD COLUMN chart_spec"));
 	}
 
 }

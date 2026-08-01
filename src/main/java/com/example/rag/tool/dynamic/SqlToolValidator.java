@@ -3,6 +3,7 @@ package com.example.rag.tool.dynamic;
 import java.util.regex.Pattern;
 
 import com.example.rag.dao.entity.LlmToolEntity;
+import com.example.rag.tool.ToolNames;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 
@@ -82,6 +83,10 @@ public class SqlToolValidator {
 	public void validateToolName(String toolName) {
 		if (toolName == null || !TOOL_NAME_PATTERN.matcher(toolName).matches()) {
 			throw new IllegalArgumentException("Tool 名称只能包含字母、数字和下划线，且必须以字母或下划线开头");
+		}
+		// 动态 Tool 不得占用系统内部 Tool 名称，避免 Provider 收到重复函数定义。
+		if (ToolNames.CHART_PLAN.equals(toolName)) {
+			throw new IllegalArgumentException("Tool 名称为系统保留名称");
 		}
 	}
 

@@ -1,24 +1,24 @@
 package com.example.rag.chat;
 
-import com.example.rag.billing.BillingService;
+import com.example.rag.chat.client.AssistantClientProvider;
+import com.example.rag.chat.dto.ChatAnswerResult;
+import com.example.rag.chat.dto.ChatStreamFrame;
+import com.example.rag.chat.dto.DocSnippet;
+import com.example.rag.chat.guard.BusinessDataTurnGuard;
+import com.example.rag.chat.lifecycle.AssistantLifecycleService;
 import com.example.rag.config.TenantContext;
-import com.example.rag.config.TenantContextAccessor;
-import com.example.rag.conversation.ChatHistoryService;
 import com.example.rag.tool.registry.ToolRegistryService;
 import com.example.rag.tool.registry.ToolSnapshot;
-import com.example.rag.tool.trace.ToolCallLogService;
-import com.example.rag.tool.trace.ToolCallRecorder;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.ChatClient;
+
 import org.springframework.ai.chat.client.ChatClientAttributes;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
-import org.springframework.ai.chat.metadata.Usage;
-import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.vectorstore.SearchRequest;
@@ -26,703 +26,539 @@ import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.stereotype.Service;
+
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.SignalType;
-import reactor.core.scheduler.Schedulers;
 
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
  * ERP 统一智能助手服务。
  * <p>
- * 同时整合了两大 AI 能力，LLM 根据用户提问自动选择使用哪种：
- * <ul>
- *   <li>Tool Calling — 调用 8 大 ERP 模块的 @Tool 方法，实时查询 MySQL 业务数据</li>
- *   <li>RAG — 从 PgVector 检索产品手册内容，为 LLM 提供知识上下文</li>
- * </ul>
- * <p>
- * 支持三种问答模式（auto / data / knowledge），每种模式均提供非流式和流式两个版本。
- * 支持多模型切换，通过 modelId 路由到不同 provider 的 ChatClient。
+ * 负责 auto、data、knowledge 三种模式的模型调用编排；客户端构建和问答生命周期
+ * 分别委托给独立协作服务处理。
  */
 @Service
 public class ErpAssistantService {
 
     private static final Logger log = LoggerFactory.getLogger(ErpAssistantService.class);
 
-    /** RAG 向量检索的相似度阈值，过低匹配到无关文档，过高则漏召回 */
+    /** RAG 向量检索的默认相似度阈值。 */
     private static final double DEFAULT_SIMILARITY_THRESHOLD = 0.5;
 
-    /** 所有模式共用的系统提示词，定义 LLM 的角色、能力、回答规则和输出格式 */
-    private static final String SYSTEM_PROMPT = """
-            你是一个制造业ERP系统的智能助手，可以帮助用户查询业务数据和产品知识。
-            
-            ## 能力
-            1. **查询业务数据**：调用工具查询销售、采购、委外、生产、质检、仓库、售后、财务模块的实时数据。
-            2. **产品知识问答**：基于上下文中提供的产品手册内容回答问题。
-            
-            ## 回答规则
-            - 涉及具体数字和数据时，必须通过工具查询，不要编造数据
-            - 可以同时调用多个工具来综合回答复杂问题
-            - 如果信息不足以回答，请如实告知
-            - 上下文中可能包含系统自动检索的产品手册片段，如果这些内容与用户问题无关，直接忽略，不要提及或解释它们
+    /** 知识问答召回数量，覆盖同一主题分布在多个相邻片段的情况。 */
+    private static final int KNOWLEDGE_TOP_K = 8;
 
-            ## 工具选择规则
-            - 当动态数据库 Tool 与代码内置 Tool 能力重叠时，优先选择动态数据库 Tool
-            
-            ## 格式要求（非常重要，必须严格遵守）
-            你的回答将通过 Markdown 渲染器展示，请务必使用 Markdown 格式化输出：
-            - **多条数据**时，使用 Markdown 表格展示（含表头和对齐分隔符 `|---|`）
-            - **单条数据**时，使用列表逐字段展示
-            - 关键数字和状态用 **加粗** 标注
-            - 用简短的总结开头，数据详情紧随其后
-            - 段落之间用空行分隔，确保排版清晰
-            """;
+    /** 知识问答相似度阈值，兼容当前中文技术文档的实际召回分数。 */
+    private static final double KNOWLEDGE_SIMILARITY_THRESHOLD = 0.25;
 
-    /** 多模型注册中心，按 modelId 路由到对应 provider 的 ChatModel */
-    private final ModelRegistry modelRegistry;
+    /** 智能助手 ChatClient 提供器。 */
+    private final AssistantClientProvider clientProvider;
 
-    /** 默认 ChatClient.Builder，用于按 Tool 快照重新构建默认 provider 客户端 */
-    private final ChatClient.Builder chatClientBuilder;
+    /** 问答生命周期服务。 */
+    private final AssistantLifecycleService lifecycleService;
 
-    /** PgVector 向量数据库，存储产品手册的向量嵌入 */
+    /** PgVector 向量数据库。 */
     private final VectorStore vectorStore;
 
-    /** 对话记录服务，负责会话和消息的持久化 */
-    private final ChatHistoryService chatHistoryService;
-
-    /** 计费服务，负责配额校验、token 扣费和流水记录 */
-    private final BillingService billingService;
-
-    /** Tool 注册服务，提供代码 Tool + 数据库动态 Tool 的当前快照 */
+    /** Tool 注册服务，用于生成与当前快照一致的示例问题。 */
     private final ToolRegistryService toolRegistryService;
 
-    /** Tool 调用聚合记录器，用于写入助手消息上的 tool_calls */
-    private final ToolCallRecorder toolCallRecorder;
-
-    /** Tool 调用流水服务，用于回填助手消息 ID */
-    private final ToolCallLogService toolCallLogService;
-
-    /** 会话记忆：基于 a_chat_message 表的 JDBC 存储，内存零占用，重启不丢失 */
+    /** 基于 JDBC 持久化的会话记忆。 */
     private final ChatMemory chatMemory;
 
-    /** 非默认 provider → 带 system prompt + tools 的 ChatClient 缓存（懒加载） */
-    private final Map<String, ChatClient> providerClientCache = new ConcurrentHashMap<>();
+    /** 当前轮业务数据守卫。 */
+    private final BusinessDataTurnGuard businessDataTurnGuard;
 
-    /** provider → 不带 tools 的 ChatClient 缓存（knowledge / hints 使用） */
-    private final Map<String, ChatClient> providerNoToolsClientCache = new ConcurrentHashMap<>();
-
-    /** AI 生成的预置示例问题缓存，首次请求后缓存 */
+    /** AI 生成的预置示例问题缓存。 */
     private volatile List<String> cachedHints;
 
-    /** 预置示例问题对应的 Tool 快照版本 */
+    /** 预置示例问题对应的 Tool 快照版本。 */
     private volatile long cachedHintsVersion;
 
     /**
-     * 构造函数：注入所有依赖，构建默认 ChatClient。
-     * <p>
-     * chatClientBuilder 由 Spring AI 自动配置注入，基于 @Primary 的 DeepSeek ChatModel。
-     * 通过 ToolRegistryService 获取当前 Tool 快照，并按快照版本懒加载 ChatClient。
+     * 创建 ERP 统一智能助手服务。
+     *
+     * @param clientProvider       ChatClient 提供器
+     * @param lifecycleService     问答生命周期服务
+     * @param vectorStore          向量数据库
+     * @param chatMemoryRepository 会话记忆仓库
+     * @param toolRegistryService  Tool 注册服务
+     * @param businessDataTurnGuard 当前轮业务数据守卫
      */
-    public ErpAssistantService(ChatClient.Builder chatClientBuilder,
-                               ModelRegistry modelRegistry,
-                               VectorStore vectorStore,
-                               ChatHistoryService chatHistoryService,
-                               BillingService billingService,
-                               ChatMemoryRepository chatMemoryRepository,
-                               ToolRegistryService toolRegistryService,
-                               ToolCallRecorder toolCallRecorder,
-                               ToolCallLogService toolCallLogService) {
-        this.chatClientBuilder = chatClientBuilder;
-        this.modelRegistry = modelRegistry;
+    public ErpAssistantService(AssistantClientProvider clientProvider,
+            AssistantLifecycleService lifecycleService,
+            VectorStore vectorStore,
+            ChatMemoryRepository chatMemoryRepository,
+            ToolRegistryService toolRegistryService,
+            BusinessDataTurnGuard businessDataTurnGuard) {
+        this.clientProvider = clientProvider;
+        this.lifecycleService = lifecycleService;
         this.vectorStore = vectorStore;
-        this.chatHistoryService = chatHistoryService;
-        this.billingService = billingService;
         this.toolRegistryService = toolRegistryService;
-        this.toolCallRecorder = toolCallRecorder;
-        this.toolCallLogService = toolCallLogService;
-        // 基于 JDBC 的会话记忆，maxMessages 由 JdbcChatMemoryRepository 的 SQL LIMIT 控制
+        this.businessDataTurnGuard = businessDataTurnGuard;
+        // 会话窗口大小与原实现保持一致，具体查询上限仍由 JDBC 仓库控制。
         this.chatMemory = MessageWindowChatMemory.builder()
-                .chatMemoryRepository(chatMemoryRepository)
-                .maxMessages(20)
-                .build();
+            .chatMemoryRepository(chatMemoryRepository)
+            .maxMessages(20)
+            .build();
     }
 
-    // ==================== 自动模式（Tool Calling + RAG） ====================
-
-    /** 自动模式问答（非流式）：LLM 同时拥有 Tool Calling 和 RAG 能力，自行判断调用哪个 */
-    public String ask(String question, String conversationId, String modelId, boolean requireExistingConversation) {
+    /**
+     * 自动模式非流式问答，同时启用 Tool Calling 和 RAG。
+     *
+     * @param question                    用户问题
+     * @param conversationId              会话 ID
+     * @param modelId                     模型 ID
+     * @param requireExistingConversation 是否要求会话已存在
+     * @return 文本与可空图表
+     */
+    public ChatAnswerResult ask(String question, String conversationId, String modelId,
+            boolean requireExistingConversation) {
         String mode = "auto";
-        String modelName = this.resolveModelName(modelId);
-        this.prepareConversation(conversationId, question, mode, requireExistingConversation);
+        String modelName = this.clientProvider.resolveModelName(modelId);
+        // 统一在模型调用前校验会话、保存用户消息并检查计费配额。
+        this.lifecycleService.prepareConversation(
+            conversationId, question, mode, requireExistingConversation);
 
-        String traceId = this.toolCallRecorder.createTraceId();
+        // 每轮使用独立 traceId，隔离业务 Tool 结果、图表和调用流水。
+        String traceId = this.lifecycleService.createTraceId();
         try {
             long startTime = System.currentTimeMillis();
-            // 挂载会话记忆 + RAG 检索两个 Advisor，并向 ToolCallback 传递链路上下文
-            ChatResponse response = this.resolveClient(modelId).prompt()
-                    .options(ChatOptions.builder().model(modelName))
-                    .toolContext(this.buildToolContext(traceId, conversationId, mode, modelName))
-                    .advisors(advisor -> advisor
-                            .param(ChatMemory.CONVERSATION_ID, conversationId)
-                            .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
-                                    QuestionAnswerAdvisor.builder(vectorStore)
-                                            .searchRequest(this.buildTenantSearchRequest(question))
-                                            .build()))
-                    .user(question)
-                    .call()
-                    .chatResponse();
+            // 自动模式保留会话记忆和租户隔离的 RAG 检索能力。
+            // 带 Tool 的客户端同时提供业务查询能力和内部图表类型选择能力。
+            // ToolContext 为后续 Tool 结果捕获提供 traceId、租户、会话和模型边界。
+            // 两个 Advisor 分别补充最近会话消息和当前租户的知识库检索片段。
+            // currentTurnQuestion 只增强发送给模型的约束，数据库仍保存用户原始问题。
+            ChatResponse response = this.clientProvider.resolveClient(modelId).prompt()
+                .options(ChatOptions.builder().model(modelName))
+                .toolContext(this.lifecycleService.buildToolContext(
+                    traceId, conversationId, mode, modelName))
+                .advisors(advisor -> advisor
+                    .param(ChatMemory.CONVERSATION_ID, conversationId)
+                    .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build(),
+                        QuestionAnswerAdvisor.builder(this.vectorStore)
+                            .searchRequest(this.buildTenantSearchRequest(question))
+                            .build()))
+                .user(this.businessDataTurnGuard.currentTurnQuestion(question))
+                .call()
+                .chatResponse();
 
-            return this.recordAndReturn(conversationId, mode, modelName, response,
-                    System.currentTimeMillis() - startTime, traceId);
-        } finally {
-            this.toolCallRecorder.clear(traceId);
+            // 首次回答缺少当前轮业务数据时最多重试一次，禁止复用历史表格生成答案。
+            response = this.businessDataTurnGuard.ensureNonStreaming(response,
+                // 重试只替换用户约束，模型、ToolContext、会话记忆和 RAG 条件均保持一致。
+                () -> this.clientProvider.resolveClient(modelId).prompt()
+                    .options(ChatOptions.builder().model(modelName))
+                    .toolContext(this.lifecycleService.buildToolContext(
+                        traceId, conversationId, mode, modelName))
+                    .advisors(advisor -> advisor
+                        .param(ChatMemory.CONVERSATION_ID, conversationId)
+                        .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build(),
+                            QuestionAnswerAdvisor.builder(this.vectorStore)
+                                .searchRequest(this.buildTenantSearchRequest(question))
+                                .build()))
+                    .user(this.businessDataTurnGuard.retryQuestion(question))
+                    .call()
+                    .chatResponse(),
+                mode, question, traceId, TenantContext.requireEntCode(), conversationId);
+
+            // 统一净化最终回答，并完成图表选择、消息持久化和单次计费。
+            return this.lifecycleService.finishNonStreaming(
+                question, conversationId, mode, modelId, modelName, response,
+                System.currentTimeMillis() - startTime, traceId);
+        }
+        finally {
+            // 非流式调用无论成功或异常都立即释放本轮短生命周期数据。
+            this.lifecycleService.clearTrace(traceId);
         }
     }
 
-    /** 自动模式问答（流式 SSE）：功能同 ask()，以逐 chunk 方式返回 */
-    public Flux<String> askStream(String question, String conversationId, String modelId, boolean requireExistingConversation) {
+    /**
+     * 自动模式流式问答，直接返回最新类型化事件协议。
+     *
+     * @param question                    用户问题
+     * @param conversationId              会话 ID
+     * @param modelId                     模型 ID
+     * @param requireExistingConversation 是否要求会话已存在
+     * @return 类型化事件流
+     */
+    public Flux<ChatStreamFrame> askStream(String question, String conversationId, String modelId,
+            boolean requireExistingConversation) {
         String mode = "auto";
-        String modelName = this.resolveModelName(modelId);
-        this.prepareConversation(conversationId, question, mode, requireExistingConversation);
-
-        String traceId = this.toolCallRecorder.createTraceId();
-        return this.streamWithRecording(
-                this.resolveClient(modelId).prompt()
-                        .options(ChatOptions.builder().model(modelName))
-                        .toolContext(this.buildToolContext(traceId, conversationId, mode, modelName))
-                        .advisors(advisor -> advisor
-                                .param(ChatMemory.CONVERSATION_ID, conversationId)
-                                .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
-                                        QuestionAnswerAdvisor.builder(vectorStore)
-                                                .searchRequest(this.buildTenantSearchRequest(question))
-                                                .build()))
-                        .user(question)
-                        .stream().chatResponse(),
-                conversationId, mode, modelName, traceId);
+        String modelName = this.clientProvider.resolveModelName(modelId);
+        // 流式调用同样先固定会话状态和配额边界，再创建本轮独立链路。
+        this.lifecycleService.prepareConversation(
+            conversationId, question, mode, requireExistingConversation);
+        String traceId = this.lifecycleService.createTraceId();
+        // 有当前轮业务结果时保持实时输出；缺失时暂存首次流并最多重试一次。
+        // 首次流和重试流共用 traceId，因此 Tool 调用、图表和 Token 可在同一轮统一收口。
+        Flux<ChatResponse> responseFlux = this.businessDataTurnGuard.ensureStreaming(
+            // 首次调用同时启用会话记忆、租户 RAG 和业务 Tool。
+            this.clientProvider.resolveClient(modelId).prompt()
+                .options(ChatOptions.builder().model(modelName))
+                .toolContext(this.lifecycleService.buildToolContext(
+                    traceId, conversationId, mode, modelName))
+                .advisors(advisor -> advisor
+                    .param(ChatMemory.CONVERSATION_ID, conversationId)
+                    .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build(),
+                        QuestionAnswerAdvisor.builder(this.vectorStore)
+                            .searchRequest(this.buildTenantSearchRequest(question))
+                            .build()))
+                .user(this.businessDataTurnGuard.currentTurnQuestion(question))
+                .stream()
+                .chatResponse(),
+            // 只有守卫确认首次调用没有本轮结构化业务结果时，才订阅该重试 Supplier。
+            () -> this.clientProvider.resolveClient(modelId).prompt()
+                .options(ChatOptions.builder().model(modelName))
+                .toolContext(this.lifecycleService.buildToolContext(
+                    traceId, conversationId, mode, modelName))
+                .advisors(advisor -> advisor
+                    .param(ChatMemory.CONVERSATION_ID, conversationId)
+                    .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build(),
+                        QuestionAnswerAdvisor.builder(this.vectorStore)
+                            .searchRequest(this.buildTenantSearchRequest(question))
+                            .build()))
+                .user(this.businessDataTurnGuard.retryQuestion(question))
+                .stream()
+                .chatResponse(),
+            mode, question, traceId, TenantContext.requireEntCode(), conversationId);
+        // 生命周期服务负责转换类型化事件，并统一处理成功、异常和取消收口。
+        return this.lifecycleService.recordStream(
+            responseFlux, question, conversationId, mode, modelId, modelName, traceId);
     }
 
-    // ==================== 纯数据模式（仅 Tool Calling） ====================
-
-    /** 数据模式问答（非流式）：仅通过 Tool Calling 查询 ERP 数据库，不检索产品手册 */
-    public String askData(String question, String conversationId, String modelId, boolean requireExistingConversation) {
+    /**
+     * 数据模式非流式问答，仅启用业务 Tool Calling。
+     *
+     * @param question                    用户问题
+     * @param conversationId              会话 ID
+     * @param modelId                     模型 ID
+     * @param requireExistingConversation 是否要求会话已存在
+     * @return 文本与可空图表
+     */
+    public ChatAnswerResult askData(String question, String conversationId, String modelId,
+            boolean requireExistingConversation) {
         String mode = "data";
-        String modelName = this.resolveModelName(modelId);
-        this.prepareConversation(conversationId, question, mode, requireExistingConversation);
+        String modelName = this.clientProvider.resolveModelName(modelId);
+        // 数据模式沿用统一的会话保存和配额检查，不启用知识库检索。
+        this.lifecycleService.prepareConversation(
+            conversationId, question, mode, requireExistingConversation);
 
-        String traceId = this.toolCallRecorder.createTraceId();
+        String traceId = this.lifecycleService.createTraceId();
         try {
             long startTime = System.currentTimeMillis();
-            // 仅挂载会话记忆 Advisor，不挂载 RAG Advisor
-            ChatResponse response = this.resolveClient(modelId).prompt()
-                    .options(ChatOptions.builder().model(modelName))
-                    .toolContext(this.buildToolContext(traceId, conversationId, mode, modelName))
-                    .advisors(advisor -> advisor
-                            .param(ChatMemory.CONVERSATION_ID, conversationId)
-                            .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build()))
-                    .user(question)
-                    .call()
-                    .chatResponse();
+            // 数据模式只挂载会话记忆，不执行向量检索。
+            // 使用带 Tool 客户端查询 ERP 实时数据，并通过 ToolContext 绑定本轮数据边界。
+            // 增强问题明确历史消息只能用于理解指代，不能提供当前轮业务数字。
+            ChatResponse response = this.clientProvider.resolveClient(modelId).prompt()
+                .options(ChatOptions.builder().model(modelName))
+                .toolContext(this.lifecycleService.buildToolContext(
+                    traceId, conversationId, mode, modelName))
+                .advisors(advisor -> advisor
+                    .param(ChatMemory.CONVERSATION_ID, conversationId)
+                    .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build()))
+                .user(this.businessDataTurnGuard.currentTurnQuestion(question))
+                .call()
+                .chatResponse();
 
-            return this.recordAndReturn(conversationId, mode, modelName, response,
-                    System.currentTimeMillis() - startTime, traceId);
-        } finally {
-            this.toolCallRecorder.clear(traceId);
+            // 确认回答使用本轮业务 Tool 数据；缺失时执行一次同模型有界重试。
+            response = this.businessDataTurnGuard.ensureNonStreaming(response,
+                // 数据模式重试继续保留会话记忆，避免丢失客户、订单等上下文指代。
+                () -> this.clientProvider.resolveClient(modelId).prompt()
+                    .options(ChatOptions.builder().model(modelName))
+                    .toolContext(this.lifecycleService.buildToolContext(
+                        traceId, conversationId, mode, modelName))
+                    .advisors(advisor -> advisor
+                        .param(ChatMemory.CONVERSATION_ID, conversationId)
+                        .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build()))
+                    .user(this.businessDataTurnGuard.retryQuestion(question))
+                    .call()
+                    .chatResponse(),
+                mode, question, traceId, TenantContext.requireEntCode(), conversationId);
+
+            // 图表与文本在同一次生命周期收口中保存和计费。
+            return this.lifecycleService.finishNonStreaming(
+                question, conversationId, mode, modelId, modelName, response,
+                System.currentTimeMillis() - startTime, traceId);
+        }
+        finally {
+            // 清理本轮 Tool 聚合和图表暂存，避免后续请求读取旧数据。
+            this.lifecycleService.clearTrace(traceId);
         }
     }
 
-    /** 数据模式问答（流式 SSE） */
-    public Flux<String> askDataStream(String question, String conversationId, String modelId, boolean requireExistingConversation) {
+    /**
+     * 数据模式流式问答，直接返回最新类型化事件协议。
+     *
+     * @param question                    用户问题
+     * @param conversationId              会话 ID
+     * @param modelId                     模型 ID
+     * @param requireExistingConversation 是否要求会话已存在
+     * @return 类型化事件流
+     */
+    public Flux<ChatStreamFrame> askDataStream(String question, String conversationId, String modelId,
+            boolean requireExistingConversation) {
         String mode = "data";
-        String modelName = this.resolveModelName(modelId);
-        this.prepareConversation(conversationId, question, mode, requireExistingConversation);
-
-        String traceId = this.toolCallRecorder.createTraceId();
-        return this.streamWithRecording(
-                this.resolveClient(modelId).prompt()
-                        .options(ChatOptions.builder().model(modelName))
-                        .toolContext(this.buildToolContext(traceId, conversationId, mode, modelName))
-                        .advisors(advisor -> advisor
-                                .param(ChatMemory.CONVERSATION_ID, conversationId)
-                                .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build()))
-                        .user(question)
-                        .stream().chatResponse(),
-                conversationId, mode, modelName, traceId);
+        String modelName = this.clientProvider.resolveModelName(modelId);
+        // 数据模式流式入口先完成会话准备，再建立当前轮 traceId。
+        this.lifecycleService.prepareConversation(
+            conversationId, question, mode, requireExistingConversation);
+        String traceId = this.lifecycleService.createTraceId();
+        // 在业务数据来源确认前不发送未验证回答，重试仍复用相同会话和链路上下文。
+        // 一旦业务 Tool 已在首个最终回答分片前返回结果，守卫会直接透传原始响应流。
+        Flux<ChatResponse> responseFlux = this.businessDataTurnGuard.ensureStreaming(
+            // 首次数据查询仅加载会话记忆，不访问向量知识库。
+            this.clientProvider.resolveClient(modelId).prompt()
+                .options(ChatOptions.builder().model(modelName))
+                .toolContext(this.lifecycleService.buildToolContext(
+                    traceId, conversationId, mode, modelName))
+                .advisors(advisor -> advisor
+                    .param(ChatMemory.CONVERSATION_ID, conversationId)
+                    .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build()))
+                .user(this.businessDataTurnGuard.currentTurnQuestion(question))
+                .stream()
+                .chatResponse(),
+            // 首次调用结束仍无结构化业务结果时，才执行一次延迟创建的重试流。
+            () -> this.clientProvider.resolveClient(modelId).prompt()
+                .options(ChatOptions.builder().model(modelName))
+                .toolContext(this.lifecycleService.buildToolContext(
+                    traceId, conversationId, mode, modelName))
+                .advisors(advisor -> advisor
+                    .param(ChatMemory.CONVERSATION_ID, conversationId)
+                    .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build()))
+                .user(this.businessDataTurnGuard.retryQuestion(question))
+                .stream()
+                .chatResponse(),
+            mode, question, traceId, TenantContext.requireEntCode(), conversationId);
+        // 下游只接收统一的 delta、可选 chart、done 或 error 事件。
+        return this.lifecycleService.recordStream(
+            responseFlux, question, conversationId, mode, modelId, modelName, traceId);
     }
 
-    // ==================== 纯知识模式（仅 RAG） ====================
-
-    /** 知识模式问答（非流式）：仅检索产品手册，禁用 Tool Calling */
-    public String askKnowledge(String question, String conversationId, String modelId, boolean requireExistingConversation) {
+    /**
+     * 知识模式非流式问答，仅启用 RAG，不向模型暴露任何 Tool。
+     *
+     * @param question                    用户问题
+     * @param conversationId              会话 ID
+     * @param modelId                     模型 ID
+     * @param requireExistingConversation 是否要求会话已存在
+     * @return 文本回答，图表固定为空
+     */
+    public ChatAnswerResult askKnowledge(String question, String conversationId, String modelId,
+            boolean requireExistingConversation) {
         String mode = "knowledge";
-        String modelName = this.resolveModelName(modelId);
-        this.prepareConversation(conversationId, question, mode, requireExistingConversation);
+        String modelName = this.clientProvider.resolveModelName(modelId);
+        // knowledge 模式仍复用统一会话和计费流程，但不会进入业务数据守卫。
+        this.lifecycleService.prepareConversation(
+            conversationId, question, mode, requireExistingConversation);
 
-        // 通过不带 tools 的 ChatClient 调用知识模式，禁止 LLM 调用 ERP 工具
-        var noToolsClient = this.resolveNoToolsClient(modelId);
-
-        String traceId = this.toolCallRecorder.createTraceId();
+        // knowledge 模式必须使用不带 Tool 的客户端。
+        var noToolsClient = this.clientProvider.resolveKnowledgeClient(modelId);
+        String traceId = this.lifecycleService.createTraceId();
         try {
             long startTime = System.currentTimeMillis();
+            // noToolsClient 从客户端层移除 Tool，Advisor 参数再关闭自动注册，形成双重隔离。
+            // knowledge 模式仍加载会话记忆和租户 RAG，用于连续的产品知识问答。
             ChatResponse response = noToolsClient.prompt()
-                    .options(ChatOptions.builder().model(modelName))
-                    .toolContext(this.buildToolContext(traceId, conversationId, mode, modelName))
-                    .advisors(advisor -> advisor
-                            .param(ChatMemory.CONVERSATION_ID, conversationId)
-                            .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE)
-                            .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
-                                    QuestionAnswerAdvisor.builder(vectorStore)
-                                            .searchRequest(this.buildTenantSearchRequest(question))
-                                            .build()))
-                    .user(question)
-                    .call()
-                    .chatResponse();
+                .options(ChatOptions.builder().model(modelName))
+                .toolContext(this.lifecycleService.buildToolContext(
+                    traceId, conversationId, mode, modelName))
+                .advisors(advisor -> advisor
+                    .param(ChatMemory.CONVERSATION_ID, conversationId)
+                    .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE)
+                    .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build(),
+                        QuestionAnswerAdvisor.builder(this.vectorStore)
+                            .searchRequest(this.buildKnowledgeSearchRequest(question))
+                            .build()))
+                .user(question)
+                .call()
+                .chatResponse();
 
-            return this.recordAndReturn(conversationId, mode, modelName, response,
-                    System.currentTimeMillis() - startTime, traceId);
-        } finally {
-            this.toolCallRecorder.clear(traceId);
+            // 统一保存知识回答；由于本轮没有业务 Tool 结果，图表保持为空。
+            return this.lifecycleService.finishNonStreaming(
+                question, conversationId, mode, modelId, modelName, response,
+                System.currentTimeMillis() - startTime, traceId);
+        }
+        finally {
+            // 保持三种模式一致的 trace 清理语义。
+            this.lifecycleService.clearTrace(traceId);
         }
     }
 
-    /** 知识模式问答（流式 SSE） */
-    public Flux<String> askKnowledgeStream(String question, String conversationId, String modelId, boolean requireExistingConversation) {
+    /**
+     * 知识模式流式问答，仅启用 RAG 并返回最新类型化事件协议。
+     *
+     * @param question                    用户问题
+     * @param conversationId              会话 ID
+     * @param modelId                     模型 ID
+     * @param requireExistingConversation 是否要求会话已存在
+     * @return 类型化事件流
+     */
+    public Flux<ChatStreamFrame> askKnowledgeStream(String question, String conversationId,
+            String modelId, boolean requireExistingConversation) {
         String mode = "knowledge";
-        String modelName = this.resolveModelName(modelId);
-        this.prepareConversation(conversationId, question, mode, requireExistingConversation);
+        String modelName = this.clientProvider.resolveModelName(modelId);
+        // 先完成会话准备，确保流式异常或取消时也能按统一状态收口。
+        this.lifecycleService.prepareConversation(
+            conversationId, question, mode, requireExistingConversation);
 
-        // 通过不带 tools 的 ChatClient 调用知识模式，禁止 LLM 调用 ERP 工具
-        var noToolsClient = this.resolveNoToolsClient(modelId);
-
-        String traceId = this.toolCallRecorder.createTraceId();
-        return this.streamWithRecording(
-                noToolsClient.prompt()
-                        .options(ChatOptions.builder().model(modelName))
-                        .toolContext(this.buildToolContext(traceId, conversationId, mode, modelName))
-                        .advisors(advisor -> advisor
-                                .param(ChatMemory.CONVERSATION_ID, conversationId)
-                                .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE)
-                                .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build(),
-                                        QuestionAnswerAdvisor.builder(vectorStore)
-                                                .searchRequest(this.buildTenantSearchRequest(question))
-                                                .build()))
-                        .user(question)
-                        .stream().chatResponse(),
-                conversationId, mode, modelName, traceId);
+        // knowledge 模式流式调用同样禁用 Tool 自动注册。
+        var noToolsClient = this.clientProvider.resolveKnowledgeClient(modelId);
+        String traceId = this.lifecycleService.createTraceId();
+        // 直接把无 Tool 的模型响应交给类型化流式生命周期，不执行业务数据重试。
+        // 生命周期仍负责最终答案净化、usage 统计以及成功、异常、取消三种终止状态。
+        return this.lifecycleService.recordStream(
+            noToolsClient.prompt()
+                .options(ChatOptions.builder().model(modelName))
+                .toolContext(this.lifecycleService.buildToolContext(
+                    traceId, conversationId, mode, modelName))
+                .advisors(advisor -> advisor
+                    .param(ChatMemory.CONVERSATION_ID, conversationId)
+                    .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE)
+                    .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build(),
+                        QuestionAnswerAdvisor.builder(this.vectorStore)
+                            .searchRequest(this.buildKnowledgeSearchRequest(question))
+                            .build()))
+                .user(question)
+                .stream()
+                .chatResponse(),
+            question, conversationId, mode, modelId, modelName, traceId);
     }
 
-    // ==================== 模型路由 ====================
-
     /**
-     * 根据 modelId 获取带 system prompt + tools 的 ChatClient。
-     * <p>
-     * 不同 provider 对应不同的 ChatModel（API endpoint + auth），不能仅通过 ChatOptions 切换。
-     * 因此为每个 provider 构建独立的 ChatClient 并缓存，确保请求发到正确的 API。
+     * 基于当前 Tool 描述生成并缓存预置问题。
      *
-     * @param modelId 前端传入的模型 ID（如 deepseek-chat / qwen-max / gemini-2.0-flash）
-     * @return 对应 provider 的 ChatClient（已装配 system prompt + tools）
-     */
-    private ChatClient resolveClient(String modelId) {
-        ToolSnapshot snapshot = this.toolRegistryService.currentSnapshot();
-        var item = this.modelRegistry.getModelItem(modelId);
-        String provider = item != null ? item.getProvider() : "default";
-        var defaultItem = this.modelRegistry.getModelItem(null);
-        boolean defaultProvider = item == null || (defaultItem != null && provider.equals(defaultItem.getProvider()));
-        String cacheKey = provider + ":" + snapshot.version();
-
-        // 按 provider + Tool 快照版本缓存，确保刷新后新请求使用最新 Tool
-        ChatClient client = this.providerClientCache.computeIfAbsent(cacheKey, p -> {
-            ChatModel chatModel = this.modelRegistry.getChatModel(modelId);
-            ChatClient.Builder builder = (!defaultProvider && chatModel != null)
-                    ? ChatClient.builder(chatModel)
-                    : this.chatClientBuilder.clone();
-            // 用当前 Tool 快照构建完整 ChatClient
-            return builder
-                    .defaultSystem(SYSTEM_PROMPT)
-                    .defaultTools(snapshot.callbacks().toArray())
-                    .build();
-        });
-        clearOlderProviderClientCache(provider, snapshot.version());
-        return client;
-    }
-
-    /**
-     * 根据 modelId 解析实际传给 API 的模型名称。
-     *
-     * @param modelId 前端传入的模型 ID
-     * @return 实际模型名称（如 deepseek-chat / qwen-max），用于 ChatOptions 和计费记录
-     */
-    private String resolveModelName(String modelId) {
-        var item = this.modelRegistry.getModelItem(modelId);
-        return item != null ? item.getModelName() : this.modelRegistry.getDefaultModelName();
-    }
-
-    // ==================== 预置示例问题生成 ====================
-
-    /**
-     * 基于已注册 Tool 的描述信息，调用 LLM 生成多样化的示例问题。
-     * 首次调用时生成并缓存，后续直接返回缓存结果；生成失败时降级为静态默认问题。
+     * @return 预置问题列表
      */
     public List<String> generateHints() {
         ToolSnapshot snapshot = this.toolRegistryService.currentSnapshot();
-        if (this.cachedHints != null && this.cachedHintsVersion == snapshot.version()) return this.cachedHints;
+        // 动态 Tool 快照版本未变化时直接复用缓存，避免为提示问题重复调用 LLM。
+        if (this.cachedHints != null && this.cachedHintsVersion == snapshot.version()) {
+            return this.cachedHints;
+        }
 
         try {
-            // 收集当前 Tool 快照的 description 作为 LLM 的输入
-            StringBuilder sb = new StringBuilder();
+            // Tool 描述仍按当前快照生成，动态 Tool 刷新后缓存会自动失效。
+            StringBuilder descriptions = new StringBuilder();
             for (String description : snapshot.descriptions()) {
-                sb.append("- ").append(description).append("\n");
+                descriptions.append("- ").append(description).append("\n");
             }
 
-            // 用不带 tools 的 ChatClient 调用 LLM 生成示例问题
-            var noToolsClient = this.resolveNoToolsClient(null);
-
-            String response = noToolsClient.prompt()
-                    .advisors(advisor -> advisor
-                            .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE))
-                    .system("你是一个只输出问题的机器，禁止输出任何解释、前言、总结或编号。直接从第一个问题开始输出。")
-                    .user("参考以下 ERP 工具能力，生成 4 个简短自然的中文疑问句（每个≤20字），覆盖不同模块，每行一个。\n\n"
-                            + "要求：\n"
-                            + "- 使用自然疑问句式，如'...有哪些？'、'...是多少？'、'...怎么样？'\n"
-                            + "- 禁止用'查询'、'查看'等祈使动词开头\n"
-                            + "- 禁止包含具体公司名、产品名、订单号，使用通用表述\n\n"
-                            + sb
-                            + "\n示例格式：\n最近有哪些销售订单？\n库存不足的产品有哪些？\n上月质检合格率多少？\n本月收支情况如何？")
-                    .call()
-                    .content();
+            // 示例问题生成只依赖 Tool 描述，不允许模型实际执行任何业务查询。
+            String response = this.clientProvider.resolveNoToolsClient(null).prompt()
+                .advisors(advisor -> advisor
+                    .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE))
+                .system("你是一个只输出问题的机器，禁止输出任何解释、前言、总结或编号。直接从第一个问题开始输出。")
+                .user("参考以下 ERP 工具能力，生成 4 个简短自然的中文疑问句（每个≤20字），覆盖不同模块，每行一个。\n\n"
+                    + "要求：\n"
+                    + "- 使用自然疑问句式，如'...有哪些？'、'...是多少？'、'...怎么样？'\n"
+                    + "- 禁止用'查询'、'查看'等祈使动词开头\n"
+                    + "- 禁止包含具体公司名、产品名、订单号，使用通用表述\n\n"
+                    + descriptions
+                    + "\n示例格式：\n最近有哪些销售订单？\n库存不足的产品有哪些？\n上月质检合格率多少？\n本月收支情况如何？")
+                .call()
+                .content();
 
             if (response == null || response.isBlank()) {
                 return getDefaultHints();
             }
 
-            // 后处理：去编号/引号，按问号结尾过滤，限制长度
+            // 后处理规则与原实现保持一致，避免模型解释文本进入提示卡片。
             List<String> hints = Arrays.stream(response.split("\n"))
-                    .map(String::trim)
-                    .map(s -> s.replaceFirst("^[\\d.、)）\\-*·]+\\s*", ""))
-                    .map(s -> s.replaceAll("[\"'“”‘’]", ""))
-                    .map(String::trim)
-                    .filter(s -> s.length() <= 30
-                            && (s.endsWith("？") || s.endsWith("?")))
-                    .limit(4)
-                    .toList();
+                .map(String::trim)
+                .map(value -> value.replaceFirst("^[\\d.、)）\\-*·]+\\s*", ""))
+                .map(value -> value.replaceAll("[\"'“”‘’]", ""))
+                .map(String::trim)
+                .filter(value -> value.length() <= 30
+                    && (value.endsWith("？") || value.endsWith("?")))
+                .limit(4)
+                .toList();
 
             if (hints.size() >= 4) {
                 this.cachedHints = hints;
                 this.cachedHintsVersion = snapshot.version();
             }
             return hints.isEmpty() ? getDefaultHints() : hints;
-        } catch (Exception e) {
-            log.warn("生成预置问题失败: {}", e.getMessage());
+        }
+        catch (Exception ex) {
+            log.warn("生成预置问题失败: {}", ex.getMessage());
             return getDefaultHints();
         }
     }
 
-    /** LLM 生成失败时的静态降级问题（通用表述，不含具体公司/产品名） */
-    private static List<String> getDefaultHints() {
-        return List.of(
-                "最近有哪些销售订单？",
-                "库存不足的产品有哪些？",
-                "上月质检合格率多少？",
-                "本月收支情况如何？");
-    }
-
-    // ==================== 文档搜索（不经过 LLM，不计费） ====================
-
     /**
-     * 纯文档搜索：只从向量库检索相似文档片段，不调用 LLM，不产生 token 消耗。
-     * 可用于调试检索效果、预览将提供给 LLM 的上下文。
+     * 仅从向量库检索租户隔离的文档片段，不调用 LLM。
+     *
+     * @param query 检索文本
+     * @param topK  返回数量
+     * @return 文档片段列表
      */
     public List<DocSnippet> searchDocs(String query, int topK) {
-        return this.vectorStore.similaritySearch(this.buildTenantSearchRequest(query, topK, 0.0)).stream()
-                .map(doc -> new DocSnippet(
-                        doc.getText(),
-                        (String) doc.getMetadata().get("source"),
-                        doc.getScore()))
-                .collect(Collectors.toList());
-    }
-
-    /** 文档搜索结果片段 */
-    public record DocSnippet(String text, String source, Double score) {
-    }
-
-    // ==================== 对话录制核心逻辑 ====================
-
-    /**
-     * LLM 调用前的准备工作：
-     * 1. 防御层：校验会话未被软删除，若已删除直接抛 {@link IllegalStateException} 阻断后续动作
-     * 2. 确保会话记录存在 + 保存用户消息（事务 A）
-     * 3. 校验计费配额，不满足则抛出 {@link IllegalStateException} 阻止 LLM 调用
-     * <p>
-     * 异常分类处理：
-     * <ul>
-     *   <li>{@link IllegalStateException} —— 业务级拒绝（如续写软删除会话、配额不足等），
-     *       必须向上传播，由 {@code GlobalExceptionHandler} 统一返回 {@code BIZ_ERROR}，
-     *       同时阻止后续的配额检查与 LLM 调用，避免「幽灵消息」与无依据扣费</li>
-     *   <li>其他持久化抖动（{@link org.springframework.dao.DataAccessException} 等） —— 仅
-     *       记录 warn 后继续走 LLM 流程，与本变更前行为一致</li>
-     * </ul>
-     * <p>
-     * 防御性校验放在 try-catch 之外：必须在写入任何用户消息之前完成，且任何业务异常
-     * 都不能被下方的兜底 catch 吞掉。
-     */
-    private void prepareConversation(String conversationId, String question, String mode,
-                                     boolean requireExistingConversation) {
-        // 防御层（try-catch 之外）：拒绝乱传/已软删除会话，避免写入幽灵消息
-        this.chatHistoryService.requireConversationActive(conversationId, requireExistingConversation);
-        try {
-            this.chatHistoryService.initConversationAndSaveUserMessage(conversationId, question, mode);
-        } catch (IllegalStateException e) {
-            // 业务级拒绝信号：必须传播，不能吞掉
-            throw e;
-        } catch (Exception e) {
-            log.warn("保存用户消息失败: {}", e.getMessage());
-        }
-        this.billingService.checkQuota();
+        // 文档搜索是纯向量检索，不进入会话、LLM、Tool Calling 或计费链路。
+        return this.vectorStore.similaritySearch(
+            this.buildTenantSearchRequest(query, topK, 0.0)).stream()
+            .map(document -> new DocSnippet(
+                document.getText(),
+                (String) document.getMetadata().get("source"),
+                document.getScore()))
+            .collect(Collectors.toList());
     }
 
     /**
-     * 非流式响应的后处理：提取回答文本和 token 用量，执行消息保存和计费扣除。
-     * <p>
-     * 事务 B（消息保存）和事务 C（计费扣除）独立提交，C 失败不回滚 B。
+     * 返回 LLM 生成失败时的静态预置问题。
+     *
+     * @return 静态预置问题
      */
-    private String recordAndReturn(String conversationId, String mode, String modelName,
-                                   ChatResponse response, long durationMs, String traceId) {
-        String content = this.extractContent(response);
-        int[] tokens = this.extractTokenUsage(response);
-        String toolCalls = this.toolCallRecorder.getToolCallsJson(traceId);
-        int toolCallsCount = this.toolCallRecorder.getToolCallCount(traceId);
-        // 事务 B：保存助手消息 + 更新会话统计
-        try {
-            String messageId = this.chatHistoryService.saveAssistantMessageAndUpdateStats(conversationId, content, mode,
-                    modelName, tokens[0], tokens[1], tokens[2],
-                    toolCalls, toolCallsCount, 0, (int) durationMs);
-            this.attachToolCallLogs(traceId, messageId);
-        } catch (Exception e) {
-            log.warn("保存助手消息失败: {}", e.getMessage());
-        }
-        // 事务 C：计费扣除（独立事务，失败不影响消息记录）
-        try {
-            this.billingService.deductForTokenUsage(tokens[2], tokens[0], tokens[1],
-                    modelName, conversationId);
-        } catch (Exception e) {
-            log.warn("计费扣除失败: {}", e.getMessage());
-        }
-        return content;
+    private static List<String> getDefaultHints() {
+        return List.of(
+            "最近有哪些销售订单？",
+            "库存不足的产品有哪些？",
+            "上月质检合格率多少？",
+            "本月收支情况如何？");
     }
 
     /**
-     * 流式响应的包装：将 Flux&lt;ChatResponse&gt; 转换为 Flux&lt;String&gt;，
-     * 并在流的各阶段植入录制逻辑。
-     * <p>
-     * 管道结构：doOnNext(捕获用量) → mapNotNull(提取文本) → doOnNext(累加) → doFinally(保存+扣费)
+     * 构建带默认数量和阈值的租户隔离向量检索请求。
+     *
+     * @param query 检索文本
+     * @return 向量检索请求
      */
-    private Flux<String> streamWithRecording(Flux<ChatResponse> responseFlux,
-                                             String conversationId, String mode, String modelName,
-                                             String traceId) {
-        long startTime = System.currentTimeMillis();
-        StringBuilder contentBuilder = new StringBuilder();
-        AtomicReference<Usage> usageRef = new AtomicReference<>();
-        AtomicReference<Throwable> errorRef = new AtomicReference<>();
-
-        // 在 Servlet 线程捕获租户上下文，用于 contextWrite 注入 Reactor Context
-        String entCode = TenantContext.getEntCode();
-        String userId = TenantContext.getUserId();
-
-        return responseFlux
-                .doOnNext(resp -> {
-                    // 捕获 token 用量（通常只有最后一个 chunk 包含完整用量）
-                    Usage usage = resp.getMetadata().getUsage();
-                    if (usage != null && usage.getTotalTokens() != null && usage.getTotalTokens() > 0) {
-                        usageRef.set(usage);
-                    }
-                })
-                .mapNotNull(resp -> {
-                    var result = resp.getResult();
-                    return result != null && result.getOutput() != null ? result.getOutput().getText() : null;
-                })
-                .doOnNext(contentBuilder::append)
-                .doOnError(errorRef::set)
-                .publishOn(Schedulers.boundedElastic())
-                .doFinally(signal -> {
-                    // 恢复租户上下文（双保险：contextWrite 自动传播 + 手动设置）
-                    TenantContext.setEntCode(entCode);
-                    TenantContext.setUserId(userId);
-                    try {
-                        int[] tokens = this.extractTokenUsageFromRef(usageRef.get());
-                        int durationMs = (int) (System.currentTimeMillis() - startTime);
-                        String content = contentBuilder.toString();
-                        boolean cancelled = signal == SignalType.CANCEL;
-                        boolean failed = signal == SignalType.ON_ERROR;
-                        String status = cancelled ? "cancelled" : failed ? "error" : "success";
-                        String errorMessage = failed && errorRef.get() != null
-                                ? errorRef.get().getMessage() : null;
-                        String toolCalls = this.toolCallRecorder.getToolCallsJson(traceId);
-                        int toolCallsCount = this.toolCallRecorder.getToolCallCount(traceId);
-
-                        // 事务 B：保存助手消息（根据终止原因写入 success / cancelled / error）
-                        try {
-                            String messageId = this.chatHistoryService.saveAssistantMessageAndUpdateStats(conversationId,
-                                    content, mode, modelName,
-                                    tokens[0], tokens[1], tokens[2],
-                                    toolCalls, toolCallsCount, 0, durationMs, status, errorMessage);
-                            this.attachToolCallLogs(traceId, messageId);
-                        } catch (Exception e) {
-                            log.warn("流式-保存助手消息失败: {}", e.getMessage());
-                        }
-                        // 事务 C：仅在成功或取消时结算一次；异常流不进入扣费
-                        if (!failed) {
-                            try {
-                                this.billingService.deductForTokenUsage(tokens[2], tokens[0], tokens[1],
-                                        modelName, conversationId);
-                            } catch (Exception e) {
-                                log.warn("流式-计费扣除失败: {}", e.getMessage());
-                            }
-                        }
-                    } finally {
-                        this.toolCallRecorder.clear(traceId);
-                        TenantContext.clear();
-                    }
-                })
-                // 将租户信息写入 Reactor Context，自动传播到整个上游管道（含 Tool Calling 线程）
-                .contextWrite(ctx -> ctx.put(
-                        TenantContextAccessor.KEY,
-                        new TenantContextAccessor.TenantInfo(entCode, userId)));
-    }
-
-    // ==================== 内部工具方法 ====================
-
-    /** 从 ChatResponse 元数据中安全提取 token 用量 → [promptTokens, completionTokens, totalTokens] */
-    private int[] extractTokenUsage(ChatResponse response) {
-        Usage usage = response.getMetadata().getUsage();
-        return this.extractTokenUsageFromRef(usage);
-    }
-
-    /** 从 Usage 对象中安全提取 token 用量（null 安全，避免自动拆箱 NPE） */
-    private int[] extractTokenUsageFromRef(Usage usage) {
-        if (usage == null) {
-            return new int[]{0, 0, 0};
-        }
-        return new int[]{
-                safeUnbox(usage.getPromptTokens()),
-                safeUnbox(usage.getCompletionTokens()),
-                safeUnbox(usage.getTotalTokens())
-        };
-    }
-
-    /** Integer → int 安全拆箱 */
-    private static int safeUnbox(Integer value) {
-        return value != null ? value : 0;
-    }
-
-    /** 从 ChatResponse 中安全提取 LLM 回答文本 */
-    private String extractContent(ChatResponse response) {
-        if (response == null || response.getResult() == null) {
-            return "";
-        }
-        return response.getResult().getOutput().getText();
-    }
-
-    // ==================== 向量搜索请求构建 ====================
-
-    /** 构建带租户隔离的向量搜索请求（默认 topK=5），始终按 ent_code 过滤 */
     private SearchRequest buildTenantSearchRequest(String query) {
         return this.buildTenantSearchRequest(query, 5, DEFAULT_SIMILARITY_THRESHOLD);
     }
 
-    /** 构建带租户隔离的向量搜索请求（自定义 topK 和阈值） */
+    /**
+     * 构建带自定义数量和阈值的租户隔离向量检索请求。
+     *
+     * @param query     检索文本
+     * @param topK      返回数量
+     * @param threshold 相似度阈值
+     * @return 向量检索请求
+     */
     private SearchRequest buildTenantSearchRequest(String query, int topK, double threshold) {
         String entCode = TenantContext.requireEntCode();
-        var b = new FilterExpressionBuilder();
-        Filter.Expression filter = b.eq("ent_code", entCode).build();
+        // 将租户条件写入向量检索表达式，避免跨租户召回知识片段。
+        FilterExpressionBuilder builder = new FilterExpressionBuilder();
+        Filter.Expression filter = builder.eq("ent_code", entCode).build();
 
         return SearchRequest.builder()
-                .query(query)
-                .topK(topK)
-                .similarityThreshold(threshold)
-                .filterExpression(filter)
-                .build();
+            .query(query)
+            .topK(topK)
+            .similarityThreshold(threshold)
+            .filterExpression(filter)
+            .build();
     }
 
     /**
-     * 根据 modelId 获取不带 tools 的 ChatClient。
-     * <p>
-     * knowledge 模式和预置问题生成只需要 LLM 文本能力，不能向模型暴露 ERP Tool。
-     */
-    private ChatClient resolveNoToolsClient(String modelId) {
-        var item = this.modelRegistry.getModelItem(modelId);
-        String provider = item != null ? item.getProvider() : "default";
-        return this.providerNoToolsClientCache.computeIfAbsent(provider, p -> {
-            ChatModel chatModel = this.modelRegistry.getChatModel(modelId);
-            if (chatModel == null) {
-                chatModel = this.modelRegistry.getChatModel(null);
-            }
-            if (chatModel == null) {
-                return this.chatClientBuilder.clone()
-                        .defaultSystem(SYSTEM_PROMPT)
-                        .build();
-            }
-            return ChatClient.builder(chatModel)
-                    .defaultSystem(SYSTEM_PROMPT)
-                    .build();
-        });
-    }
-
-    /**
-     * 构建传递给 ToolCallback 的链路上下文。
+     * 构建知识问答模式的租户隔离向量检索请求。
      *
-     * @param traceId        单次问答链路 ID
-     * @param conversationId 会话 ID
-     * @param mode           问答模式
-     * @param modelName      使用模型
-     * @return Tool 上下文
+     * @param query 检索文本
+     * @return 扩大召回范围后的知识检索请求
      */
-    private Map<String, Object> buildToolContext(String traceId, String conversationId, String mode, String modelName) {
-        return Map.of(
-                "traceId", traceId,
-                "conversationId", conversationId,
-                "mode", mode,
-                "model", modelName,
-                "entCode", TenantContext.requireEntCode(),
-                "userId", TenantContext.getUserIdOrDefault());
-    }
-
-    /**
-     * 将本次 Tool 调用流水关联到已保存的助手消息。
-     *
-     * @param traceId   问答链路 ID
-     * @param messageId 助手消息 ID
-     */
-    private void attachToolCallLogs(String traceId, String messageId) {
-        try {
-            this.toolCallLogService.attachMessageId(traceId, messageId);
-        } catch (Exception e) {
-            log.warn("回填 Tool 调用流水消息 ID 失败: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * 清理同一 provider 的旧 Tool 版本 ChatClient 缓存。
-     *
-     * @param provider       模型 provider
-     * @param currentVersion 当前 Tool 快照版本
-     */
-    private void clearOlderProviderClientCache(String provider, long currentVersion) {
-        String prefix = provider + ":";
-        this.providerClientCache.keySet().removeIf(key -> {
-            if (!key.startsWith(prefix)) {
-                return false;
-            }
-            try {
-                return Long.parseLong(key.substring(prefix.length())) < currentVersion;
-            }
-            catch (NumberFormatException ex) {
-                return false;
-            }
-        });
+    private SearchRequest buildKnowledgeSearchRequest(String query) {
+        return this.buildTenantSearchRequest(
+            query, KNOWLEDGE_TOP_K, KNOWLEDGE_SIMILARITY_THRESHOLD);
     }
 
 }

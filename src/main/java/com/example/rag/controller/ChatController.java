@@ -2,16 +2,19 @@ package com.example.rag.controller;
 
 import com.example.rag.chat.DocumentLoaderService;
 import com.example.rag.chat.ErpAssistantService;
+import com.example.rag.chat.dto.ChatAnswerResult;
+import com.example.rag.chat.dto.ChatStreamFrame;
+import com.example.rag.chat.dto.DocSnippet;
 import com.example.rag.config.ModelProperties;
 import com.example.rag.vo.ChatVO;
 import com.example.rag.vo.RespVO;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import reactor.core.publisher.Flux;
 
-import jakarta.servlet.http.HttpServletResponse;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -81,26 +84,31 @@ public class ChatController {
         String cid = hasConversationId ? request.conversationId() : UUID.randomUUID().toString();
         String mid = request.modelId();
 
-        String answer = switch (request.mode()) {
+        ChatAnswerResult result = switch (request.mode()) {
             case "data" -> assistantService.askData(request.question(), cid, mid, hasConversationId);
             case "knowledge" -> assistantService.askKnowledge(request.question(), cid, mid, hasConversationId);
             default -> assistantService.ask(request.question(), cid, mid, hasConversationId);
         };
 
-        return RespVO.success(new ChatVO.AskResponse(cid, request.question(), answer, request.mode()));
+        return RespVO.success(new ChatVO.AskResponse(
+                cid, request.question(), result.answer(), request.mode(), result.chart()));
     }
 
     @GetMapping(value = "/ask/stream", produces = {MediaType.TEXT_EVENT_STREAM_VALUE, MediaType.APPLICATION_JSON_VALUE})
-    public ResponseEntity<?> askStream(ChatVO.AskRequest request, HttpServletResponse response) {
+    public ResponseEntity<?> askStream(ChatVO.AskRequest request) {
         boolean hasConversationId = !request.conversationId().isBlank();
         String cid = hasConversationId ? request.conversationId() : UUID.randomUUID().toString();
         String mid = request.modelId();
         try {
-            Flux<String> body = switch (request.mode()) {
+            // 前后端一体部署直接使用类型化 SSE，每个 data 都是可独立解析的 JSON。
+            Flux<ChatStreamFrame> frames = switch (request.mode()) {
                 case "data" -> assistantService.askDataStream(request.question(), cid, mid, hasConversationId);
                 case "knowledge" -> assistantService.askKnowledgeStream(request.question(), cid, mid, hasConversationId);
                 default -> assistantService.askStream(request.question(), cid, mid, hasConversationId);
             };
+            Flux<ServerSentEvent<Object>> body = frames.map(frame -> ServerSentEvent.builder(frame.data())
+                    .event(frame.event())
+                    .build());
             return ResponseEntity.ok()
                     .header("X-Conversation-Id", cid)
                     .contentType(MediaType.TEXT_EVENT_STREAM)
@@ -147,7 +155,7 @@ public class ChatController {
      */
     @GetMapping("/search")
     public RespVO<ChatVO.DocSearchResponse> search(ChatVO.DocSearchRequest request) {
-        List<ErpAssistantService.DocSnippet> raw = assistantService.searchDocs(
+        List<DocSnippet> raw = assistantService.searchDocs(
                 request.query(), request.topK());
 
         List<ChatVO.DocSnippetResponse> results = raw.stream()

@@ -1,7 +1,7 @@
 # Spring AI RAG Demo — ERP 智能助手
 
 ## 项目定位
-基于 Spring AI 1.1.4 的 ERP 智能问答 Demo，融合两大 AI 能力：
+基于 Spring AI 2.0.0 的 ERP 智能问答 Demo，融合两大 AI 能力：
 - **Tool Calling**：LLM 自动调用 `@Tool` 方法查询 ERP MySQL 业务数据（订单、库存、工单、财务等）
 - **RAG**：从 PgVector 向量库检索产品手册片段，作为知识上下文注入 Prompt
 
@@ -10,7 +10,7 @@
 ## 技术栈
 - 启动类：`com.example.rag.RagDemoApplication`
 - 根包：`com.example.rag`
-- Java 17、Spring Boot 3.5.12、Spring AI 1.1.4（BOM 统一管理）
+- Java 17、Spring Boot 4.0.7、Spring AI 2.0.0（BOM 统一管理）
 - 构建：Maven 单模块（无子 module）
 - 数据库：
   - PostgreSQL + pgvector（向量库 `rag_demo`，`@Primary`，承载文档嵌入与 RAG 检索）
@@ -23,15 +23,19 @@
 
 ## 架构风格
 - 单模块 Spring Boot 应用，**无模块前缀**概念
-- 经典三层为主：Controller → Service → JdbcTemplate（无 JPA、无 MyBatis）
+- 经典三层为主：Controller → Service → MyBatis-Plus / JdbcTemplate（无 JPA）
 - 业务域按职责划分子包，复杂业务可拆分为多个 Service / Helper 协作
 - AI 编排集中在 `chat/ErpAssistantService`，通过 `ChatClient` + `Advisor`（`MessageChatMemoryAdvisor`、`QuestionAnswerAdvisor`）组合能力
 
 ## 包结构
 - `chat/` — 智能助手入口
   - `ChatController`：`/api/ask`、`/api/ask/stream`、`/api/upload`、`/api/load`、`/api/search`、`/api/models`、`/api/hints`
-  - `ErpAssistantService`：三种问答模式（auto / data / knowledge），同时提供非流式与 SSE 流式
-  - `DocumentLoaderService`：基于 Tika 的文档读取与切片入库
+  - `ErpAssistantService`：三种问答模式（auto / data / knowledge）的模型调用编排
+  - `chat/client`：多模型 ChatClient 路由、Tool 装配与缓存
+  - `chat/lifecycle`：问答消息、计费、Tool 记录与流式收口
+  - `chat/dto`：chat 域内部不可变 DTO / record
+  - `chat/chart/*`：按 model、capture、compile、protocol、tool 分包的图表能力
+  - `DocumentLoaderService`：基于 Tika 的受控文本提取、实际 ONNX WordPiece token 二次切分、同来源覆盖和分批向量入库
   - `ModelRegistry`：多 ChatModel Bean 按 `modelId` 路由
 - `billing/` — 计费域：账户、套餐、配额校验、token 扣费、充值、用量聚合
 - `conversation/` — 对话历史：会话列表、消息列表、`JdbcChatMemoryRepository`（PgVector 同库，承载 ChatMemory 持久化）
@@ -73,9 +77,10 @@
 ## AI 能力专项约束
 - **`@Tool` 方法**：`description` 必须详细描述触发场景与返回字段；参数用 `@ToolParam` 标注语义；返回值优先用 `List<Map<String,Object>>` 直接序列化
 - **多模型路由**：禁止在业务代码注入特定 provider 的 ChatModel，统一通过 `ModelRegistry.getChatModel(modelId)` 获取
-- **System Prompt**：模式间共享 `ErpAssistantService.SYSTEM_PROMPT`；新增模式时只能扩展，不应推翻整体格式约定（Markdown 表格输出）
-- **流式接口**：`/api/ask/stream` 直接返回 `Flux<String>`，**不**包装为 `RespVO`；前端按 SSE 协议消费
-- **RAG 检索**：默认相似度阈值 `DEFAULT_SIMILARITY_THRESHOLD = 0.5`，调整需评估召回率与精度
+- **System Prompt**：auto/data 模式使用 ERP 业务提示词，knowledge 模式使用独立知识库提示词；两者均保持 Markdown 格式和最终答案边界约定
+- **流式接口**：`/api/ask/stream` 直接返回带 `delta`、`chart`、`done`、`error` 事件的类型化 SSE，**不**包装为 `RespVO`
+- **RAG 检索**：auto 模式默认相似度阈值为 `0.5`，knowledge 模式使用 `topK = 8`、相似度阈值 `0.25`；所有模式必须按 `ent_code` 过滤
+- **文档导入**：HTTP 允许 500MB 单文件/550MB 请求；提取文本最多 500 万字符、最终分片最多 2 万个、单批向量写入最多 100 条，同租户同 `source` 重新导入时覆盖旧数据
 
 ## 前端
 项目为**前后端一体部署**，前端资源由 Spring Boot 直接托管在 `src/main/resources/static/` 下，**无**独立前端工程、**无** npm / webpack / vite 等构建工具。
@@ -85,7 +90,7 @@
   - **AI 对话**：左侧文档管理 + 文档搜索（向量库），右侧聊天面板（模式切换 + 模型选择 + SSE 流式输出）
   - **历史记录**：会话列表 + 消息详情，助手消息支持 Markdown 回放
   - **计费管理**：账户概览卡片 + 子 Tab（套餐 / 交易流水 / 每日用量 / 月度用量 / 充值）
-- `app.js` — 全部交互逻辑（约 750 行），按 `// ===` 注释分块：通用工具 → Tab 导航 → 文档管理 → 文档搜索 → 聊天 → 历史记录 → 计费 → 初始化
+- `app.js` — 全部交互逻辑，按 `// ===` 注释分块：通用工具 → Tab 导航 → 文档管理 → 文档搜索 → 聊天 → 历史记录 → 计费 → 初始化
 - `style.css` — 全局样式，主题变量集中在 `:root`（`--primary` / `--bg` / `--text` / `--success` / `--error` 等）
 - `vendor/` — 第三方库本地化（`marked.min.js` / `highlight.min.js` / `highlight-github.min.css`），**禁止**直连 CDN
 
@@ -97,7 +102,7 @@
 - **统一封装**：所有非流式 API 必须走 `apiCall(url, options)` / `apiPost(url, body)`，它会：
   1. 自动附加 `X-Ent-Code`（来自 `getEntCode()`）和 `X-User-Id`（来自 `getUserId()`）
   2. 解包 `RespVO`，`success=false` 时抛 `Error(errMsg)`，`success=true` 时返回 `data` 字段
-- **SSE 流式**：`/api/ask/stream` 不走 `apiCall`，需手动 `fetch` + `getReader()` 流式读取，按 `\n\n` 切分事件并交给 `parseSSEEventData()` 解析；解析必须兼容 Spring WebFlux 对含 `\n` 的 `Flux<String>` 的非标准 SSE 编码（参考 `parseSSEEventData()` 注释）
+- **SSE 流式**：`/api/ask/stream` 不走 `apiCall`，需手动 `fetch` + `getReader()` 流式读取，按 `\n\n` 切分标准 `event:` / JSON `data:` 事件并分别处理文本、图表、完成和错误状态
 - **会话 ID**：首次提问时由前端 `crypto.randomUUID()` 生成 `currentConversationId`，同会话期间复用并通过 `conversationId` query 参数传给后端；切换会话调 `newConversation()` 重置
 
 ### 渲染与安全

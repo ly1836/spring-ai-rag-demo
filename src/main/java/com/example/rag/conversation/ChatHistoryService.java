@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.UUID;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.example.rag.chat.chart.protocol.ChartSpecCodec;
+import com.example.rag.chat.output.AssistantAnswerSanitizer;
 import com.example.rag.config.TenantContext;
 import com.example.rag.dao.entity.ChatConversationEntity;
 import com.example.rag.dao.entity.ChatMessageEntity;
@@ -44,9 +46,18 @@ public class ChatHistoryService {
 	/** 对话消息 Mapper。 */
 	private final ChatMessageMapper messageMapper;
 
-	public ChatHistoryService(ChatConversationMapper conversationMapper, ChatMessageMapper messageMapper) {
+	/** 图表协议编解码器。 */
+	private final ChartSpecCodec chartSpecCodec;
+
+	/** 助手最终答案净化器。 */
+	private final AssistantAnswerSanitizer answerSanitizer;
+
+	public ChatHistoryService(ChatConversationMapper conversationMapper, ChatMessageMapper messageMapper,
+			ChartSpecCodec chartSpecCodec, AssistantAnswerSanitizer answerSanitizer) {
 		this.conversationMapper = conversationMapper;
 		this.messageMapper = messageMapper;
+		this.chartSpecCodec = chartSpecCodec;
+		this.answerSanitizer = answerSanitizer;
 	}
 
 	// ==================== 事务化组合方法 ====================
@@ -89,6 +100,7 @@ public class ChatHistoryService {
 	 * @param totalTokens      总 token 数
 	 * @param toolCalls        工具调用记录（JSON）
 	 * @param toolCallsCount   工具调用次数
+	 * @param chartSpec        助手图表数据 JSON
 	 * @param ragDocCount      RAG 检索文档数
 	 * @param durationMs       响应耗时（毫秒）
 	 * @return 助手消息 ID（UUID）
@@ -96,9 +108,9 @@ public class ChatHistoryService {
 	@Transactional(transactionManager = "erpTransactionManager")
 	public String saveAssistantMessageAndUpdateStats(String conversationId, String content, String mode,
 			String model, int promptTokens, int completionTokens, int totalTokens,
-			String toolCalls, int toolCallsCount, int ragDocCount, Integer durationMs) {
+			String toolCalls, int toolCallsCount, String chartSpec, int ragDocCount, Integer durationMs) {
 		return saveAssistantMessageAndUpdateStats(conversationId, content, mode, model,
-			promptTokens, completionTokens, totalTokens, toolCalls, toolCallsCount, ragDocCount,
+			promptTokens, completionTokens, totalTokens, toolCalls, toolCallsCount, chartSpec, ragDocCount,
 			durationMs, "success", null);
 	}
 
@@ -114,6 +126,7 @@ public class ChatHistoryService {
 	 * @param totalTokens      总 token 数
 	 * @param toolCalls        工具调用记录（JSON）
 	 * @param toolCallsCount   工具调用次数
+	 * @param chartSpec        助手图表数据 JSON
 	 * @param ragDocCount      RAG 检索文档数
 	 * @param durationMs       响应耗时（毫秒）
 	 * @param status           助手消息状态：success / cancelled / error
@@ -123,11 +136,11 @@ public class ChatHistoryService {
 	@Transactional(transactionManager = "erpTransactionManager")
 	public String saveAssistantMessageAndUpdateStats(String conversationId, String content, String mode,
 			String model, int promptTokens, int completionTokens, int totalTokens,
-			String toolCalls, int toolCallsCount, int ragDocCount, Integer durationMs,
+			String toolCalls, int toolCallsCount, String chartSpec, int ragDocCount, Integer durationMs,
 			String status, String errorMessage) {
 		String messageId = saveAssistantMessage(conversationId, content, mode,
 			model, promptTokens, completionTokens, totalTokens,
-			toolCalls, toolCallsCount, ragDocCount, durationMs, status, errorMessage);
+			toolCalls, toolCallsCount, chartSpec, ragDocCount, durationMs, status, errorMessage);
 		// 统计更新为非关键操作，失败不回滚事务
 		try {
 			updateConversationStats(conversationId);
@@ -165,7 +178,7 @@ public class ChatHistoryService {
 	 */
 	public String saveUserMessage(String conversationId, String content, String mode) {
 		return saveMessage(conversationId, "user", content, mode,
-			null, 0, 0, 0, null, 0, 0, null, "success", null);
+			null, 0, 0, 0, null, 0, null, 0, null, "success", null);
 	}
 
 	/**
@@ -180,15 +193,16 @@ public class ChatHistoryService {
 	 * @param totalTokens     总 token 数
 	 * @param toolCalls       工具调用记录（JSON 数组字符串）
 	 * @param toolCallsCount  工具调用次数
+	 * @param chartSpec       助手图表数据 JSON
 	 * @param ragDocCount     RAG 检索的文档片段数
 	 * @param durationMs      LLM 响应耗时（毫秒）
 	 * @return 生成的消息 ID（UUID）
 	 */
 	public String saveAssistantMessage(String conversationId, String content, String mode,
 			String model, int promptTokens, int completionTokens, int totalTokens,
-			String toolCalls, int toolCallsCount, int ragDocCount, Integer durationMs) {
+			String toolCalls, int toolCallsCount, String chartSpec, int ragDocCount, Integer durationMs) {
 		return saveAssistantMessage(conversationId, content, mode, model, promptTokens,
-			completionTokens, totalTokens, toolCalls, toolCallsCount, ragDocCount, durationMs,
+			completionTokens, totalTokens, toolCalls, toolCallsCount, chartSpec, ragDocCount, durationMs,
 			"success", null);
 	}
 
@@ -204,6 +218,7 @@ public class ChatHistoryService {
 	 * @param totalTokens      总 token 数
 	 * @param toolCalls        工具调用记录（JSON 数组字符串）
 	 * @param toolCallsCount   工具调用次数
+	 * @param chartSpec        助手图表数据 JSON
 	 * @param ragDocCount      RAG 检索的文档片段数
 	 * @param durationMs       LLM 响应耗时（毫秒）
 	 * @param status           消息状态：success / cancelled / error
@@ -212,11 +227,11 @@ public class ChatHistoryService {
 	 */
 	public String saveAssistantMessage(String conversationId, String content, String mode,
 			String model, int promptTokens, int completionTokens, int totalTokens,
-			String toolCalls, int toolCallsCount, int ragDocCount, Integer durationMs,
+			String toolCalls, int toolCallsCount, String chartSpec, int ragDocCount, Integer durationMs,
 			String status, String errorMessage) {
 		return saveMessage(conversationId, "assistant", content, mode,
 			model, promptTokens, completionTokens, totalTokens,
-			toolCalls, toolCallsCount, ragDocCount, durationMs, status, errorMessage);
+			toolCalls, toolCallsCount, chartSpec, ragDocCount, durationMs, status, errorMessage);
 	}
 
 	/**
@@ -232,7 +247,7 @@ public class ChatHistoryService {
 	public String saveErrorMessage(String conversationId, String mode, String model,
 			Integer durationMs, String errorMessage) {
 		return saveMessage(conversationId, "assistant", null, mode,
-			model, 0, 0, 0, null, 0, 0, durationMs, "error", errorMessage);
+			model, 0, 0, 0, null, 0, null, 0, durationMs, "error", errorMessage);
 	}
 
 	/**
@@ -262,14 +277,17 @@ public class ChatHistoryService {
 
 	/**
 	 * 查询指定会话下的所有消息（按创建时间正序）。
-	 * 自动按 ent_code 过滤，确保租户隔离。
+	 * 自动按 ent_code + user_id 过滤，确保租户和用户隔离。
 	 *
 	 * @param conversationId 会话 ID
 	 * @return 消息详情列表
 	 */
 	public List<ConversationVO.ChatMessageItemResponse> getMessages(String conversationId) {
-		TenantContext.requireEntCode();
-		return messageMapper.selectMessageItems(conversationId);
+		// 历史消息查询与续聊共用会话所有权校验，避免同租户用户越权读取。
+		requireConversationActive(conversationId, true);
+		return messageMapper.selectMessageItems(conversationId).stream()
+			.map(this::toMessageItem)
+			.toList();
 	}
 
 	/**
@@ -278,7 +296,8 @@ public class ChatHistoryService {
 	 * @param conversationId 会话 ID
 	 */
 	public void archiveConversation(String conversationId) {
-		TenantContext.requireEntCode();
+		// 软删除前校验当前用户拥有目标会话，避免同租户用户越权归档。
+		requireConversationActive(conversationId, true);
 		ChatConversationEntity entity = new ChatConversationEntity();
 		entity.setStatus("deleted");
 		conversationMapper.update(entity, new LambdaUpdateWrapper<ChatConversationEntity>()
@@ -308,7 +327,9 @@ public class ChatHistoryService {
 	 */
 	public void requireConversationActive(String conversationId, boolean requireExisting) {
 		TenantContext.requireEntCode();
-		List<String> existingStatus = conversationMapper.selectStatus(conversationId);
+		String userId = TenantContext.getUserIdOrDefault();
+		// 会话状态查询同时限定当前用户，其他用户的会话统一表现为不存在。
+		List<String> existingStatus = conversationMapper.selectStatus(conversationId, userId);
 		if (existingStatus.isEmpty()) {
 			if (requireExisting) {
 				throw new IllegalStateException("会话不存在，不可继续");
@@ -328,7 +349,7 @@ public class ChatHistoryService {
 	 */
 	private String saveMessage(String conversationId, String role, String content, String mode,
 			String model, int promptTokens, int completionTokens, int totalTokens,
-			String toolCalls, int toolCallsCount, int ragDocCount,
+			String toolCalls, int toolCallsCount, String chartSpec, int ragDocCount,
 			Integer durationMs, String status, String errorMessage) {
 		String messageId = UUID.randomUUID().toString();
 		String entCode = TenantContext.requireEntCode();
@@ -347,12 +368,36 @@ public class ChatHistoryService {
 		entity.setTotalTokens(totalTokens);
 		entity.setToolCalls(toolCalls);
 		entity.setToolCallsCount(toolCallsCount);
+		entity.setChartSpec(chartSpec);
 		entity.setRagDocCount(ragDocCount);
 		entity.setDurationMs(durationMs);
 		entity.setStatus(status);
 		entity.setErrorMessage(errorMessage);
 		messageMapper.insert(entity);
 		return messageId;
+	}
+
+	/**
+	 * 将数据库消息记录转换为接口返回结构。
+	 *
+	 * @param record 数据库消息记录
+	 * @return 接口消息结构
+	 */
+	private ConversationVO.ChatMessageItemResponse toMessageItem(ConversationVO.ChatMessageRecord record) {
+		com.example.rag.vo.ChartVO.ChartSpec chart = null;
+		try {
+			chart = chartSpecCodec.decode(record.chartSpec());
+		}
+		catch (IllegalArgumentException ex) {
+			log.warn("解析历史消息图表失败: messageId={}, error={}", record.messageId(), ex.getMessage());
+		}
+		String content = "assistant".equals(record.role())
+			? this.answerSanitizer.sanitize(record.content()) : record.content();
+		return new ConversationVO.ChatMessageItemResponse(
+			record.messageId(), record.role(), content, record.mode(), record.model(),
+			record.promptTokens(), record.completionTokens(), record.totalTokens(),
+			record.toolCalls(), record.toolCallsCount(), chart, record.ragDocCount(),
+			record.durationMs(), record.status(), record.errorMessage(), record.createdAt());
 	}
 
 }

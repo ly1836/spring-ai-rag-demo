@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.example.rag.chat.chart.capture.ToolResultRecorder;
 import com.example.rag.dao.entity.LlmToolEntity;
 import com.example.rag.dao.mapper.LlmToolMapper;
 import com.example.rag.tool.BaseTool;
@@ -50,6 +51,9 @@ public class ToolRegistryService {
 	/** 动态 SQL Tool 校验器。 */
 	private final SqlToolValidator sqlToolValidator;
 
+	/** 业务 Tool 结果记录器。 */
+	private final ToolResultRecorder toolResultRecorder;
+
 	/** 当前 Tool 快照引用。 */
 	private final AtomicReference<ToolSnapshot> currentSnapshot;
 
@@ -62,16 +66,19 @@ public class ToolRegistryService {
 	 * @param toolCallRecorder            Tool 调用聚合记录器
 	 * @param toolCallLogService          Tool 调用流水服务
 	 * @param sqlToolValidator            动态 SQL Tool 校验器
+	 * @param toolResultRecorder          业务 Tool 结果记录器
 	 */
 	public ToolRegistryService(List<BaseTool> codeTools, LlmToolMapper llmToolMapper,
 			DatabaseToolCallbackFactory databaseToolCallbackFactory, ToolCallRecorder toolCallRecorder,
-			ToolCallLogService toolCallLogService, SqlToolValidator sqlToolValidator) {
+			ToolCallLogService toolCallLogService, SqlToolValidator sqlToolValidator,
+			ToolResultRecorder toolResultRecorder) {
 		this.codeTools = List.copyOf(codeTools);
 		this.llmToolMapper = llmToolMapper;
 		this.databaseToolCallbackFactory = databaseToolCallbackFactory;
 		this.toolCallRecorder = toolCallRecorder;
 		this.toolCallLogService = toolCallLogService;
 		this.sqlToolValidator = sqlToolValidator;
+		this.toolResultRecorder = toolResultRecorder;
 		List<ToolCallback> callbacks = buildCodeToolCallbacks();
 		this.currentSnapshot = new AtomicReference<>(new ToolSnapshot(1L, callbacks, describe(callbacks)));
 	}
@@ -164,7 +171,7 @@ public class ToolRegistryService {
 	 * @return 带日志能力的 ToolCallback
 	 */
 	public ToolCallback wrap(ToolCallback callback, String toolType) {
-		return new LoggingToolCallback(callback, toolType, toolCallRecorder, toolCallLogService);
+		return new LoggingToolCallback(callback, toolType, toolCallRecorder, toolCallLogService, toolResultRecorder);
 	}
 
 	/**

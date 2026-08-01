@@ -57,6 +57,9 @@ public class ChatMessageEntity {
 	/** 工具调用次数。*/
 	private Integer toolCallsCount;
 
+	/** 助手图表数据 JSON。*/
+	private String chartSpec;
+
 	/** RAG 检索文档数。*/
 	private Integer ragDocCount;
 

@@ -72,8 +72,13 @@ public interface ChatConversationMapper extends BaseMapper<ChatConversationEntit
 	 * 查询会话状态。
 	 *
 	 * @param conversationId 会话 ID
+	 * @param userId         用户 ID
 	 * @return 状态列。
 	 */
-	@Select("SELECT status FROM a_chat_conversation WHERE conversation_id = #{conversationId}")
-	List<String> selectStatus(@Param("conversationId") String conversationId);
+	@Select("""
+		SELECT status FROM a_chat_conversation
+		WHERE conversation_id = #{conversationId} AND user_id = #{userId}
+		""")
+	List<String> selectStatus(@Param("conversationId") String conversationId,
+			@Param("userId") String userId);
 }

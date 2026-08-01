@@ -41,6 +41,8 @@ let currentModelId = '';
 let currentStreamController = null;
 /** 当前流式回复对应的气泡 DOM */
 let currentStreamBubble = null;
+/** 当前流式回复对应的消息 DOM 句柄 */
+let currentStreamMessage = null;
 /** 是否由用户主动终止当前流 */
 let isUserCancellingStream = false;
 /** 工具管理页当前加载的 Tool 列表 */
@@ -56,6 +58,8 @@ const DEFAULT_TOOL_INPUT_SCHEMA = `{
   },
   "required": ["customerName"]
 }`;
+/** 图表窗口缩放的动画帧句柄 */
+let chartResizeFrame = null;
 
 // ============================================================
 //  通用工具
@@ -119,33 +123,40 @@ function renderMarkdown(text) {
 }
 
 /**
- * 从一个完整的 SSE 事件文本中提取 data 字段值。
+ * 按 SSE 标准解析单个类型化事件块。
+ * 多个 data 行使用换行连接，event 缺失时使用 message。
  *
- * Spring WebFlux 对 Flux<String> 的 SSE 编码，在 data 内容含 \n 时
- * 不一定为每行都添加 data: 前缀。因此解析策略为：
- *   - data: 开头的行 → 提取为数据行
- *   - 非 SSE 标准字段（event:/id:/retry:/:）的行 → 视为上一个 data 的续行
- * 多行之间用 \n 拼接以还原原始换行。
+ * @param {string} eventText 单个 SSE 事件文本
+ * @returns {{event: string, data: string}} 事件类型与合并后的数据文本
  */
-function parseSSEEventData(eventText) {
-  var parts = [];
-  var inData = false;
-  var lines = eventText.split('\n');
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i];
-    if (line.startsWith('data:')) {
-      if (inData) parts.push('\n');
-      var v = line.substring(5);
-      parts.push(v.charAt(0) === ' ' ? v.substring(1) : v);
-      inData = true;
-    } else if (inData && line !== '' &&
-               !line.startsWith('event:') && !line.startsWith('id:') &&
-               !line.startsWith('retry:') && !line.startsWith(':')) {
-      parts.push('\n');
-      parts.push(line);
+function parseSSEEvent(eventText) {
+  var eventName = 'message';
+  var dataLines = [];
+  eventText.split('\n').forEach(function(line) {
+    if (line.startsWith('event:')) {
+      eventName = line.substring(6).trim() || 'message';
+    } else if (line.startsWith('data:')) {
+      var data = line.substring(5);
+      dataLines.push(data.charAt(0) === ' ' ? data.substring(1) : data);
     }
+  });
+  return { event: eventName, data: dataLines.join('\n') };
+}
+
+/**
+ * 跨网络分片规范化 SSE 换行符，避免被拆开的 CRLF 误变成两个换行。
+ * @param {string} text 当前解码文本
+ * @param {Object} state 当前流状态
+ * @param {boolean} finalChunk 是否为解码器最终分片
+ * @returns {string} 使用 LF 的规范化文本
+ */
+function normalizeSSEChunk(text, state, finalChunk) {
+  var combined = (state.pendingCarriageReturn ? '\r' : '') + (text || '');
+  state.pendingCarriageReturn = !finalChunk && combined.endsWith('\r');
+  if (state.pendingCarriageReturn) {
+    combined = combined.substring(0, combined.length - 1);
   }
-  return parts.join('');
+  return combined.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
 /** 从错误响应文本中提取可展示错误信息（兼容 RespVO JSON 与纯文本） */
@@ -157,20 +168,6 @@ function extractErrorMessage(text) {
   } catch (e) {
     return text;
   }
-}
-
-/** 如果文本是 RespVO 错误 JSON，则返回 errMsg，否则返回空字符串 */
-function extractRespVOError(text) {
-  if (!text) return '';
-  var trimmed = text.trim();
-  if (!trimmed.startsWith('{')) return '';
-  try {
-    var json = JSON.parse(trimmed);
-    if (json.success === false) {
-      return json.errMsg || json.errCode || '请求失败';
-    }
-  } catch (e) { /* 不是 JSON，忽略 */ }
-  return '';
 }
 
 /**
@@ -362,7 +359,12 @@ function setMode(btn) {
  * 在聊天面板中添加一条消息气泡。
  * - 用户消息：纯文本显示
  * - 助手消息：添加 markdown-body class，支持 Markdown 渲染
- * @returns {HTMLElement} 气泡 DOM 元素（用于流式更新 innerHTML）
+ *
+ * @param {string} role 消息角色
+ * @param {string} text 消息文本
+ * @param {string} mode 用户提问模式
+ * @returns {{message: HTMLElement, wrapper: HTMLElement, bubble: HTMLElement, meta: HTMLElement}}
+ *          消息 DOM 句柄
  */
 function addMessage(role, text, mode) {
   const welcome = document.getElementById('welcome');
@@ -374,6 +376,7 @@ function addMessage(role, text, mode) {
   avatar.className = 'msg-avatar';
   avatar.innerHTML = role === 'user' ? '&#128100;' : '&#129302;';
   const wrapper = document.createElement('div');
+  wrapper.className = 'msg-content';
   const bubble = document.createElement('div');
   bubble.className = 'msg-bubble' + (role === 'assistant' ? ' markdown-body' : '');
   if (role === 'assistant' && text) {
@@ -406,7 +409,53 @@ function addMessage(role, text, mode) {
   msgDiv.appendChild(wrapper);
   container.appendChild(msgDiv);
   container.scrollTop = container.scrollHeight;
-  return bubble;
+  return { message: msgDiv, wrapper: wrapper, bubble: bubble, meta: meta };
+}
+
+/**
+ * 在助手 Markdown 下方安全渲染本条消息的唯一图表。
+ * ChartSpec 只作为对象传给适配器，不写入 innerHTML 或 HTML attribute。
+ *
+ * @param {Object} messageHandle 消息 DOM 句柄
+ * @param {Object} chartSpec 图表协议对象
+ * @returns {void}
+ */
+function renderMessageChart(messageHandle, chartSpec) {
+  if (!messageHandle || !messageHandle.wrapper || !chartSpec) return;
+  // 助手消息包含图表时增加独立标记，供移动端扩展可视区域。
+  if (messageHandle.message) messageHandle.message.classList.add('has-chart');
+  var existing = messageHandle.wrapper.querySelector('.chart-card');
+  if (existing) {
+    if (window.ChartAdapter) window.ChartAdapter.disposeWithin(existing);
+    existing.remove();
+  }
+  var card = document.createElement('div');
+  card.className = 'chart-card';
+  var container = document.createElement('div');
+  container.className = 'chart-container';
+  container.setAttribute('role', 'img');
+  container.setAttribute('aria-label', '业务数据图表');
+  card.appendChild(container);
+  messageHandle.wrapper.insertBefore(card, messageHandle.meta || null);
+  if (!window.ChartAdapter || !window.ChartAdapter.render(container, chartSpec)) {
+    // 渲染失败时移除不可用容器，只保留原有助手文本并恢复消息宽度。
+    if (window.ChartAdapter) window.ChartAdapter.disposeWithin(card);
+    card.remove();
+    if (messageHandle.message) messageHandle.message.classList.remove('has-chart');
+  }
+}
+
+/**
+ * 在单个动画帧中统一调整页面现存图表尺寸。
+ *
+ * @returns {void}
+ */
+function resizeMessageCharts() {
+  if (chartResizeFrame != null) cancelAnimationFrame(chartResizeFrame);
+  chartResizeFrame = requestAnimationFrame(function() {
+    chartResizeFrame = null;
+    if (window.ChartAdapter) window.ChartAdapter.resizeWithin(document.body);
+  });
 }
 
 /** 添加"正在输入"动画指示器 */
@@ -472,6 +521,63 @@ function askHint(el) { document.getElementById('questionInput').value = el.textC
 function handleInputKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuestion(); } }
 
 /**
+ * 分派单个类型化 SSE 事件并更新当前消息状态。
+ *
+ * @param {string} eventText 单个 SSE 事件文本
+ * @param {Object} state 当前流式消息状态
+ * @param {Object} messageHandle 消息 DOM 句柄
+ * @returns {void}
+ * @throws {Error} 事件 JSON 非法或服务端返回错误事件时抛出
+ */
+function handleStreamEvent(eventText, state, messageHandle) {
+  var parsed = parseSSEEvent(eventText);
+  if (!parsed.data) return;
+  var payload;
+  try {
+    payload = JSON.parse(parsed.data);
+  } catch (e) {
+    throw new Error('流式事件数据格式错误');
+  }
+  if (parsed.event === 'delta') {
+    state.fullText += payload.text || '';
+    renderAssistantBubble(messageHandle.bubble, state.fullText, false);
+  } else if (parsed.event === 'chart') {
+    // 图表先暂存，只有服务端明确发送 done 后才进入页面。
+    state.pendingChart = payload.chart || null;
+  } else if (parsed.event === 'done') {
+    state.done = true;
+    if (state.pendingChart) {
+      renderMessageChart(messageHandle, state.pendingChart);
+      state.pendingChart = null;
+    }
+  } else if (parsed.event === 'error') {
+    throw new Error(payload.message || '回答生成失败');
+  }
+}
+
+/**
+ * 在当前助手气泡中保留已接收正文并追加安全错误提示。
+ *
+ * @param {Object} messageHandle 当前助手消息 DOM 句柄
+ * @param {string} message 面向用户的错误提示
+ * @returns {void}
+ */
+function renderStreamError(messageHandle, message) {
+  if (!messageHandle || !messageHandle.bubble) return;
+  var bubble = messageHandle.bubble;
+  var receivedText = bubble.dataset.rawText || '';
+  if (receivedText) {
+    renderAssistantBubble(bubble, receivedText, false);
+  } else {
+    bubble.textContent = '';
+  }
+  var note = document.createElement('div');
+  note.className = 'stream-error-note';
+  note.textContent = message || '请求失败';
+  bubble.appendChild(note);
+}
+
+/**
  * 发送问题并以 SSE 流式接收回答。
  *
  * 流程：
@@ -493,6 +599,7 @@ async function sendQuestion() {
   setStreamingState(true);
   isUserCancellingStream = false;
   currentStreamBubble = null;
+  currentStreamMessage = null;
   currentStreamController = new AbortController();
 
   try {
@@ -524,64 +631,71 @@ async function sendQuestion() {
     }
 
     removeTypingIndicator();
-    const bubble = addMessage('assistant', '', mode);
+    const messageHandle = addMessage('assistant', '', mode);
+    const bubble = messageHandle.bubble;
+    currentStreamMessage = messageHandle;
     currentStreamBubble = bubble;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let fullText = '';
+    const streamState = { fullText: '', done: false, pendingChart: null, pendingCarriageReturn: false };
     let sseBuffer = '';
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) {
         const remaining = decoder.decode();
-        if (remaining) sseBuffer += remaining;
+        sseBuffer += normalizeSSEChunk(remaining, streamState, true);
         break;
       }
-      sseBuffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      sseBuffer += normalizeSSEChunk(decoder.decode(value, { stream: true }), streamState, false);
 
       // 只处理已完整接收的 SSE 事件（以 \n\n 分隔）
       let idx;
       while ((idx = sseBuffer.indexOf('\n\n')) !== -1) {
         var eventText = sseBuffer.substring(0, idx);
         sseBuffer = sseBuffer.substring(idx + 2);
-        var eventData = parseSSEEventData(eventText);
-        var eventError = extractRespVOError(eventData);
-        if (eventError) throw new Error(eventError);
-        fullText += eventData;
+        handleStreamEvent(eventText, streamState, messageHandle);
       }
 
-      renderAssistantBubble(bubble, fullText, false);
       document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
     }
 
     // 处理缓冲区中可能残留的最后一个事件（服务端关闭时可能无尾部 \n\n）
     if (sseBuffer.trim()) {
-      var remainingData = parseSSEEventData(sseBuffer);
-      var remainingError = extractRespVOError(remainingData);
-      if (remainingError) throw new Error(remainingError);
-      fullText += remainingData;
+      handleStreamEvent(sseBuffer, streamState, messageHandle);
+    }
+    // ReadableStream 正常关闭不代表回答成功，必须收到服务端显式完成事件。
+    if (!streamState.done) {
+      throw new Error('回答连接提前结束，请重试');
     }
 
-    renderAssistantBubble(bubble, fullText, false);
-    if (fullText) {
+    renderAssistantBubble(bubble, streamState.fullText, false);
+    if (streamState.fullText) {
       highlightCodeBlocks(bubble);
     }
     document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
   } catch (e) {
     removeTypingIndicator();
     if (e.name === 'AbortError' && isUserCancellingStream) {
-      if (!currentStreamBubble) {
-        currentStreamBubble = addMessage('assistant', '', mode);
+      if (!currentStreamMessage) {
+        currentStreamMessage = addMessage('assistant', '', mode);
+        currentStreamBubble = currentStreamMessage.bubble;
       }
       renderAssistantBubble(currentStreamBubble, currentStreamBubble.dataset.rawText || '', true);
     } else {
-      addMessage('assistant', e.message || '请求失败');
-      showToast(e.message || '请求失败', 'error');
+      var errorMessage = e.message || '请求失败';
+      if (currentStreamMessage) {
+        renderStreamError(currentStreamMessage, errorMessage);
+      } else {
+        currentStreamMessage = addMessage('assistant', errorMessage, mode);
+        currentStreamBubble = currentStreamMessage.bubble;
+      }
+      showToast(errorMessage, 'error');
     }
   } finally {
     currentStreamController = null;
     currentStreamBubble = null;
+    currentStreamMessage = null;
     isUserCancellingStream = false;
     setStreamingState(false);
     input.focus();
@@ -643,6 +757,7 @@ function newConversation() {
   currentConversationId = null;
   updateConversationTag();
   var container = document.getElementById('chatMessages');
+  if (window.ChartAdapter) window.ChartAdapter.disposeWithin(container);
   container.innerHTML = '';
   var welcome = document.createElement('div'); welcome.className = 'welcome'; welcome.id = 'welcome';
   welcome.innerHTML = '<div class="icon">&#x1f916;</div><h2>ERP 智能助手</h2>' +
@@ -694,6 +809,7 @@ async function loadMessages(conversationId) {
   event.currentTarget?.classList?.add('selected');
   const container = document.getElementById('historyMessages');
   document.getElementById('historyDetailTitle').textContent = '会话 ' + conversationId.substring(0, 8) + '...';
+  if (window.ChartAdapter) window.ChartAdapter.disposeWithin(container);
   container.innerHTML = '<p class="placeholder-text">加载中...</p>';
   try {
     const data = await apiCall(API + '/conversations/' + conversationId + '/messages');
@@ -718,6 +834,12 @@ async function loadMessages(conversationId) {
         '</div>' +
       '</div>'
     ).join('');
+    var historyItems = container.querySelectorAll('.history-msg');
+    data.messages.forEach(function(message, index) {
+      if (message.chart && historyItems[index]) {
+        renderMessageChart({ wrapper: historyItems[index], meta: null }, message.chart);
+      }
+    });
   } catch (e) { container.innerHTML = '<p style="color:var(--error);">' + e.message + '</p>'; }
 }
 
@@ -755,6 +877,7 @@ async function continueConversation(conversationId) {
   // 替换会话标识，重置聊天容器（清空欢迎页与旧消息）
   currentConversationId = conversationId;
   const container = document.getElementById('chatMessages');
+  if (window.ChartAdapter) window.ChartAdapter.disposeWithin(container);
   container.innerHTML = '';
 
   // 续聊 mode 默认继承最后一条消息的 mode
@@ -780,7 +903,9 @@ async function continueConversation(conversationId) {
     if (role === 'user') {
       addMessage('user', content, m.mode);
     } else {
-      const bubble = addMessage('assistant', content, m.mode);
+      const messageHandle = addMessage('assistant', content, m.mode);
+      const bubble = messageHandle.bubble;
+      renderMessageChart(messageHandle, m.chart);
       // cancelled / error 助手消息追加状态角标，与「历史记录」Tab 表达一致
       if (m.status === 'cancelled') {
         bubble.innerHTML += '<div class="stream-stop-note">回答已终止</div>';
@@ -806,7 +931,9 @@ async function deleteConversation(conversationId) {
     await apiCall(API + '/conversations/' + conversationId, { method: 'DELETE' });
     showToast('已删除');
     loadConversations();
-    document.getElementById('historyMessages').innerHTML = '<p class="placeholder-text">&#8592; 从左侧选择一个对话</p>';
+    var historyMessages = document.getElementById('historyMessages');
+    if (window.ChartAdapter) window.ChartAdapter.disposeWithin(historyMessages);
+    historyMessages.innerHTML = '<p class="placeholder-text">&#8592; 从左侧选择一个对话</p>';
   } catch (e) { showToast(e.message, 'error'); }
 }
 
@@ -1181,4 +1308,5 @@ document.addEventListener('DOMContentLoaded', () => {
   resetToolForm();
   loadModels();
   loadHints();
+  window.addEventListener('resize', resizeMessageCharts);
 });

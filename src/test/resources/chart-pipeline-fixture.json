@@ -1,0 +1,126 @@
+{
+  "sourceRows": [
+    {"month": "一月", "region": "华东", "sales": 10},
+    {"month": "二月", "region": "华东", "sales": 15},
+    {"month": "一月", "region": "华南", "sales": 8}
+  ],
+  "chartSpec": {
+    "schemaVersion": "1.0",
+    "chartId": "shared-heatmap-contract",
+    "type": "heatmap",
+    "title": "区域月度销售热力图",
+    "subtitle": null,
+    "dataset": {
+      "dimensions": [
+        {"key": "month", "label": "月份", "dataType": "string", "unit": null},
+        {"key": "region", "label": "区域", "dataType": "string", "unit": null},
+        {"key": "sales", "label": "销售额", "dataType": "number", "unit": "元"}
+      ],
+      "rows": [
+        {"month": "一月", "region": "华东", "sales": 10},
+        {"month": "二月", "region": "华东", "sales": 15},
+        {"month": "一月", "region": "华南", "sales": 8}
+      ]
+    },
+    "encoding": {
+      "x": ["month"],
+      "y": ["region"],
+      "value": ["sales"]
+    },
+    "options": {
+      "orientation": "vertical",
+      "stacked": false,
+      "smooth": false,
+      "step": null,
+      "binCount": null,
+      "min": null,
+      "max": null,
+      "unit": "元",
+      "sort": null,
+      "showLabel": true
+    },
+    "source": {
+      "toolNames": ["query_heatmap"]
+    }
+  },
+  "collisionSpecs": [
+    {
+      "schemaVersion": "1.0",
+      "chartId": "shared-bubble-collision-contract",
+      "type": "bubble",
+      "title": "气泡字段碰撞",
+      "subtitle": null,
+      "dataset": {
+        "dimensions": [
+          {"key": "x", "label": "x名称", "dataType": "number", "unit": null},
+          {"key": "y", "label": "y名称", "dataType": "number", "unit": null},
+          {"key": "size", "label": "size名称", "dataType": "number", "unit": null},
+          {"key": "visualSize", "label": "visualSize名称", "dataType": "string", "unit": null},
+          {"key": "__chart_visualSize", "label": "显示尺寸", "dataType": "number", "unit": null}
+        ],
+        "rows": [
+          {"x": 1, "y": 2, "size": 3, "visualSize": "业务系列", "__chart_visualSize": 35.0}
+        ]
+      },
+      "encoding": {
+        "x": ["x"],
+        "y": ["y"],
+        "size": ["size"],
+        "series": ["visualSize"],
+        "visualSize": ["__chart_visualSize"]
+      },
+      "options": {
+        "orientation": "vertical",
+        "stacked": false,
+        "smooth": false,
+        "step": "middle",
+        "binCount": null,
+        "min": 0.0,
+        "max": 100.0,
+        "unit": null,
+        "sort": "desc",
+        "showLabel": true
+      },
+      "source": {
+        "toolNames": ["query_fixture"]
+      }
+    },
+    {
+      "schemaVersion": "1.0",
+      "chartId": "shared-liquid-collision-contract",
+      "type": "liquid-fill",
+      "title": "水位字段碰撞",
+      "subtitle": null,
+      "dataset": {
+        "dimensions": [
+          {"key": "name", "label": "name名称", "dataType": "string", "unit": null},
+          {"key": "normalized", "label": "normalized名称", "dataType": "number", "unit": null},
+          {"key": "__chart_normalized", "label": "归一值", "dataType": "number", "unit": null}
+        ],
+        "rows": [
+          {"name": "库存水位", "normalized": 50, "__chart_normalized": 0.5}
+        ]
+      },
+      "encoding": {
+        "name": ["name"],
+        "value": ["normalized"],
+        "normalized": ["__chart_normalized"]
+      },
+      "options": {
+        "orientation": "vertical",
+        "stacked": false,
+        "smooth": false,
+        "step": "middle",
+        "binCount": null,
+        "min": 0.0,
+        "max": 100.0,
+        "unit": null,
+        "sort": "desc",
+        "showLabel": true
+      },
+      "source": {
+        "toolNames": ["query_fixture"]
+      }
+    }
+  ]
+}

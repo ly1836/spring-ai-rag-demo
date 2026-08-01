@@ -60,6 +60,7 @@ public final class ConversationVO {
 	 * @param totalTokens      总 token 数
 	 * @param toolCalls        工具调用记录（JSON 数组字符串）
 	 * @param toolCallsCount   工具调用次数
+	 * @param chart            助手图表数据，无图表时为空
 	 * @param ragDocCount      RAG 检索的文档片段数
 	 * @param durationMs       LLM 响应耗时（毫秒）
 	 * @param status           消息状态：success / cancelled / error / timeout
@@ -69,7 +70,34 @@ public final class ConversationVO {
 	public record ChatMessageItemResponse(
 			String messageId, String role, String content, String mode, String model,
 			int promptTokens, int completionTokens, int totalTokens,
-			String toolCalls, int toolCallsCount, int ragDocCount,
+			String toolCalls, int toolCallsCount, ChartVO.ChartSpec chart, int ragDocCount,
+			Integer durationMs, String status, String errorMessage, String createdAt) {
+	}
+
+	/**
+	 * 数据库查询使用的消息记录。
+	 *
+	 * @param messageId        消息唯一标识（UUID）
+	 * @param role             角色：user / assistant / system
+	 * @param content          消息文本内容
+	 * @param mode             问答模式
+	 * @param model            使用的 LLM 模型名称
+	 * @param promptTokens     提示词 token 数
+	 * @param completionTokens 生成回答 token 数
+	 * @param totalTokens      总 token 数
+	 * @param toolCalls        工具调用记录（JSON 数组字符串）
+	 * @param toolCallsCount   工具调用次数
+	 * @param chartSpec        助手图表数据 JSON
+	 * @param ragDocCount      RAG 检索的文档片段数
+	 * @param durationMs       LLM 响应耗时（毫秒）
+	 * @param status           消息状态
+	 * @param errorMessage     错误信息
+	 * @param createdAt        创建时间
+	 */
+	public record ChatMessageRecord(
+			String messageId, String role, String content, String mode, String model,
+			int promptTokens, int completionTokens, int totalTokens,
+			String toolCalls, int toolCallsCount, String chartSpec, int ragDocCount,
 			Integer durationMs, String status, String errorMessage, String createdAt) {
 	}
 

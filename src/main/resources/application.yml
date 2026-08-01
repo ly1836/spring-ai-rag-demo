@@ -37,6 +37,12 @@ app:
       model-name: gemini-2.0-flash
 
 spring:
+  # 文档上传的单文件与整次请求大小上限
+  servlet:
+    multipart:
+      max-file-size: 500MB
+      max-request-size: 550MB
+
   ai:
     # Spring AI 2.x 多个 embedding starter 同时存在时，显式选择本地 transformers，避免 PgVector 注入远程 OpenAI EmbeddingModel。
     model:
@@ -99,7 +105,7 @@ spring:
     erp:
       url: jdbc:mysql://localhost:13306/erp?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8&allowPublicKeyRetrieval=true
       username: ${ERP_DB_USER:root}
-      password: ${ERP_DB_PASSWORD:mm#20250912}
+      password: ${ERP_DB_PASSWORD:admin}
       driver-class-name: com.mysql.cj.jdbc.Driver
 
 server:
