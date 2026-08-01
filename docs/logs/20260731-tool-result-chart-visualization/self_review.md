@@ -1,9 +1,9 @@
 # 自查报告
 
 - Change ID: tool-result-chart-visualization
-- Latest Review Time: 2026-08-01 14:50:51
-- 变更范围：当前 `git diff HEAD` 与未跟踪截图共 97 个文件；覆盖 OpenSpec、chat 图表模型/捕获/编译/协议/选择 Tool、当前轮业务数据守卫、问答客户端与生命周期拆分、最终答案净化、知识文档受控导入、Controller、会话历史、数据库迁移、业务 Tool 包装、对外 VO、静态前端、本地图表依赖、中英文 README、示例截图和测试。
-- OpenSpec 材料：已读取 `proposal.md`、`design.md`、`tasks.md`，以及 `tool-result-chart-visualization`、`dynamic-llm-tools`、`chat-streaming-cancellation`、`chat-history-resume`、`knowledge-document-ingestion` 五份 delta spec；任务 169/169 已完成，严格校验通过。
+- Latest Review Time: 2026-08-01 15:20:29
+- 变更范围：本轮提交仅同步五份 OpenSpec delta spec 到主规范、归档 `tool-result-chart-visualization` change，并将中英文 README 的 20 条图表测试话术表收敛为“序号、图表、测试话术”三列；未修改 Java、JavaScript、数据库或运行配置。
+- OpenSpec 材料：已读取归档目录中的 `proposal.md`、`design.md`、`tasks.md` 和五份 delta spec；任务 169/169 已完成。主规范共 8 份严格校验通过，当前活动 change 列表为空。
 
 ## 执行记录
 
@@ -14,6 +14,7 @@
 | 2026-08-01 00:32:01 | 修复英文直接业务查询、多系列自动绑定、甘特进度与水平时间范围、SSE 错误气泡复用和项目上下文漂移，并执行完整门禁 | 通过 |
 | 2026-08-01 13:22:33 | 复核流式最终答案标记分片、工具结果单次解析、Spring Bean 依赖和原业务逻辑，并执行当前完整本地门禁 | 通过 |
 | 2026-08-01 14:50:51 | 复核知识文档资源预算、知识问答专用检索、README 双语示例与截图，并重新执行完整构建和提交前门禁 | 通过 |
+| 2026-08-01 15:20:29 | 复核五份 delta spec 与主规范同步结果、归档材料完整性、活动 change 状态及中英文 README 三列表格结构 | 通过 |
 
 ## 问题清单
 
@@ -59,6 +60,8 @@
 - 业务 Tool 结果在资源预算内只反序列化一次；显式空结果与不支持结构继续使用原有降级语义，不影响文本回答。
 - 知识文档导入对请求体、解析字符、分片数量、真实 Token 和批次大小实施分层预算；同租户同来源使用覆盖语义，失败批次执行清理。
 - knowledge 模式使用知识库专用系统提示词和更宽召回参数，不装配业务 Tool；auto/data 的原有 Tool 与 RAG 策略未被 README 修订改变。
+- 五份 delta spec 已同步到主规范；`tool-result-chart-visualization` 已归档到 `openspec/changes/archive/2026-08-01-tool-result-chart-visualization/`，proposal、design、169 项任务和完整 delta specs 均保留。
+- 中英文 README 仅移除测试话术表中的建议截图名列，20 种图表及其可复制话术保持一致，未改变产品协议或运行逻辑。
 
 ## 非功能审查
 
@@ -67,12 +70,13 @@
 - 边界：覆盖空结果、标量、无效 JSON、超大/过深结构、重复规划、未知字段、错误单位、非法范围、空值、历史坏数据、英文直接查询、系列联合分组、甘特进度、最终答案标记跨分片、流式异常和取消，以及超长文档、真实 Token 切分、批次失败清理和知识问答非 ERP 文档。
 - 性能：正常图表选择复用原问答 Tool Calling 循环；仅在漏查询或漏选择时各允许一次有界模型调用，不新增业务 SQL；原始结果、最终行数和协议大小均有限制，业务 Tool JSON 单次解析，文档向量按 100 条分批写入，终止路径清理短生命周期数据。
 - 回归风险：auto/data/knowledge 的模型路由、RAG、会话记忆、业务 Tool、计费和日志语义保留；协议变更由同仓前端同步消费，历史数据使用可空字段兼容。
+- 本轮文档变更：未新增 Spring Bean、运行依赖或可执行代码，不影响并发、安全、性能、原业务逻辑和历史兼容；如需回退，只需恢复 change 目录、主规范和 README 表格列。
 
 ## 测试缺口
 
-- 当前本地自动化已覆盖 194 项 Java 测试、33 个前端 fixture、README 中英文 20 条话术及本地图片引用检查、新增前端函数 JSDoc 结构检查、OpenSpec 严格校验和 Git 差异检查；本轮未重新执行浏览器桌面/窄屏手工操作，未发现阻塞性自动化测试缺口。
+- 既有实现已覆盖 194 项 Java 测试和 33 个前端 fixture；本轮仅修改规范与文档，因此未重复执行 Maven、Node 或浏览器操作。已针对本轮实际变化完成 8 份主规范严格校验、归档完整性、169 项任务完成度、中英文 README 20 行三列表格及 Git 差异检查，未发现阻塞性缺口。
 
 ## 结论
 
 - 结果：通过
-- 摘要：当前实现与 OpenSpec 最终需求一致，新增 Spring Bean 无循环依赖，原问答、计费、业务 Tool 和历史主流程只发生需求范围内的扩展与安全收紧。
+- 摘要：最终实现已同步到主规范并完成归档；本轮未修改 Spring Bean 或运行代码，原问答、计费、业务 Tool 和历史主流程均未变化，中英文 README 调整符合用户要求。

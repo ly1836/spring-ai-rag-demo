@@ -199,28 +199,28 @@ The chart protocol supports 23 types: donut, sunburst, bar, waterfall, bullet, a
 
 These prompts use the project's seeded demo data. Run them in Auto Mode or Data Query Mode. When a prompt explicitly requests a supported chart type, the LLM is instructed to prioritize that type.
 
-| No. | Chart | Suggested Screenshot | Copy-Paste Test Prompt |
-|---:|---|---|---|
-| 1 | Donut | `img.png` | Query after-sales tickets from March 1 to March 31, 2026, count tickets by processing status, and use a donut chart to show each status share. |
-| 2 | Bar | `01-bar.png` | Query sales orders from March 1 to March 31, 2026, aggregate sales quantity by product, and use a bar chart to show product sales. |
-| 3 | Waterfall | `02-waterfall.png` | Query the incoming, returned, and rejected material records for outsourcing order OO20260301, show quantity changes by product, and display them in a waterfall chart. |
-| 4 | Bullet | `03-bullet.png` | Query the receipt status of purchase order PO20260302, and use a bullet chart to compare the ordered and received quantities of the NTC10K temperature sensor. |
-| 5 | Area | `04-area.png` | Query sales orders from March 1 to March 31, 2026, show sales amount changes by order date, and use an area chart to display the sales trend. |
-| 6 | Step | `05-step.png` | Query inventory movement records from March 1 to March 31, 2026, show inbound and outbound quantity changes by date, and display them in a step chart. |
-| 7 | Radar | `06-radar.png` | Query the quality inspection results for batch L20260309, and use a radar chart to compare sampled, qualified, and defective quantities. |
-| 8 | Scatter | `07-scatter.png` | Query sales orders from March 1 to March 31, 2026, and use a scatter plot to analyze the relationship between order quantity and sales amount. |
-| 9 | Bubble | `08-bubble.png` | Query quality inspection records from March 1 to March 31, 2026, use a bubble chart to show the relationship between qualified and defective quantities, and use sampled quantity as bubble size. |
-| 10 | Histogram | `09-histogram.png` | Query sales orders from March 1 to March 31, 2026, and use a histogram to show the distribution of order sales amounts. |
-| 11 | Boxplot | `10-boxplot.png` | Query sales orders from March 1 to March 31, 2026, and use a boxplot to show the order amount distribution by customer. |
-| 12 | Heatmap | `11-heatmap.png` | Query sales orders from March 1 to March 31, 2026, and use a heatmap to show sales quantities for each customer-product combination. |
-| 13 | Gantt | `06-gantt.png` | Query production work orders starting from March 1 to March 31, 2026, and use a Gantt chart to show each product work order's planned start and end dates. |
-| 14 | Funnel | `13-funnel.png` | Query after-sales tickets from March 1 to March 31, 2026, count them by processing status, and use a funnel chart to show the ticket status distribution. |
-| 15 | Word Cloud | `14-word-cloud.png` | Query after-sales tickets from March 1 to March 31, 2026, count occurrences by issue type, and use a word cloud to show issue frequencies. |
-| 16 | Gauge | `15-gauge.png` | Query the accounts receivable of customer `张三电子科技有限公司`, and use a gauge chart to show the current outstanding receivable balance. |
-| 17 | Liquid Fill | `16-liquid-fill.png` | Query the sales summary from March 1 to March 31, 2026, and use a liquid-fill chart to show the customer count. |
-| 18 | Parallel Coordinates | `17-parallel.png` | Query production work orders starting from March 1 to March 31, 2026, and use a parallel coordinates chart to compare planned, completed, and scrapped quantities for each product work order. |
-| 19 | Line | `18-line.png` | Query payment receipt records from March 1 to March 31, 2026, and use a line chart to show the payment amount trend by receipt date. |
-| 20 | Pie | `19-pie.png` | Query sales orders from March 1 to March 31, 2026, aggregate sales quantity by product, and use a pie chart to show each product's sales share. |
+| No. | Chart | Copy-Paste Test Prompt |
+|---:|---|---|
+| 1 | Donut | Query after-sales tickets from March 1 to March 31, 2026, count tickets by processing status, and use a donut chart to show each status share. |
+| 2 | Bar | Query sales orders from March 1 to March 31, 2026, aggregate sales quantity by product, and use a bar chart to show product sales. |
+| 3 | Waterfall | Query the incoming, returned, and rejected material records for outsourcing order OO20260301, show quantity changes by product, and display them in a waterfall chart. |
+| 4 | Bullet | Query the receipt status of purchase order PO20260302, and use a bullet chart to compare the ordered and received quantities of the NTC10K temperature sensor. |
+| 5 | Area | Query sales orders from March 1 to March 31, 2026, show sales amount changes by order date, and use an area chart to display the sales trend. |
+| 6 | Step | Query inventory movement records from March 1 to March 31, 2026, show inbound and outbound quantity changes by date, and display them in a step chart. |
+| 7 | Radar | Query the quality inspection results for batch L20260309, and use a radar chart to compare sampled, qualified, and defective quantities. |
+| 8 | Scatter | Query sales orders from March 1 to March 31, 2026, and use a scatter plot to analyze the relationship between order quantity and sales amount. |
+| 9 | Bubble | Query quality inspection records from March 1 to March 31, 2026, use a bubble chart to show the relationship between qualified and defective quantities, and use sampled quantity as bubble size. |
+| 10 | Histogram | Query sales orders from March 1 to March 31, 2026, and use a histogram to show the distribution of order sales amounts. |
+| 11 | Boxplot | Query sales orders from March 1 to March 31, 2026, and use a boxplot to show the order amount distribution by customer. |
+| 12 | Heatmap | Query sales orders from March 1 to March 31, 2026, and use a heatmap to show sales quantities for each customer-product combination. |
+| 13 | Gantt | Query production work orders starting from March 1 to March 31, 2026, and use a Gantt chart to show each product work order's planned start and end dates. |
+| 14 | Funnel | Query after-sales tickets from March 1 to March 31, 2026, count them by processing status, and use a funnel chart to show the ticket status distribution. |
+| 15 | Word Cloud | Query after-sales tickets from March 1 to March 31, 2026, count occurrences by issue type, and use a word cloud to show issue frequencies. |
+| 16 | Gauge | Query the accounts receivable of customer `张三电子科技有限公司`, and use a gauge chart to show the current outstanding receivable balance. |
+| 17 | Liquid Fill | Query the sales summary from March 1 to March 31, 2026, and use a liquid-fill chart to show the customer count. |
+| 18 | Parallel Coordinates | Query production work orders starting from March 1 to March 31, 2026, and use a parallel coordinates chart to compare planned, completed, and scrapped quantities for each product work order. |
+| 19 | Line | Query payment receipt records from March 1 to March 31, 2026, and use a line chart to show the payment amount trend by receipt date. |
+| 20 | Pie | Query sales orders from March 1 to March 31, 2026, aggregate sales quantity by product, and use a pie chart to show each product's sales share. |
 
 ### ERP Tool Calling (Code Tools + Dynamic Database Tools)
 

@@ -3,7 +3,7 @@
 ## 元数据
 
 - 变更 ID：tool-result-chart-visualization
-- 最近更新：2026-08-01 14:50:51
+- 最近更新：2026-08-01 15:20:29
 - 开发者：leiyang
 - AI工具：Codex
 
@@ -14,6 +14,7 @@
 - 2026-08-01 00:32:01：用户要求全部采纳本轮 review 建议；已修复英文直接数据请求、多系列自动绑定、甘特进度与水平时间范围、SSE 错误气泡复用和 OpenSpec 项目上下文漂移，并以 186 项 Java 测试和 33 个前端 fixture 重新验证。
 - 2026-08-01 13:22:33：用户采纳后续 review 的两项建议；已修复流式终止时最终答案标记前缀泄漏和业务 Tool JSON 重复解析，并完成无新增问题复审，以 194 项 Java 测试、33 个前端 fixture、OpenSpec strict 和 Git 差异检查验证。
 - 2026-08-01 14:50:51：整合大文件上传与单文档 Token 超限修复、knowledge 模式非 ERP 文档问答修复、中英文 README 图表能力说明和示例截图；重新执行 194 项 Java 测试、33 个前端 fixture、README 图片/话术检查、OpenSpec strict 和 Git 差异检查。
+- 2026-08-01 15:20:29：用户选择先同步 delta specs 再归档；已将五份 delta spec 合并到主规范，归档完整 change，并按后续要求移除中英文 README 话术表的建议截图名列。8 份主规范严格校验全部通过，当前活动 change 为空，两份 README 均保留 20 行三列表格。
 
 ## 关键提示词
 
@@ -34,6 +35,7 @@
 - 用户反馈知识问答模式无法使用已导入向量库的 JVM 文档，且智能模式与知识问答模式表现不一致。
 - 用户要求整体更新中英文 README，加入图表功能、20 条可直接测试的话术和实际截图；顶部使用环形图，后续图片避免重复，并将甘特截图最终编号为 `06-gantt.png`。
 - 用户要求执行 Git 提交，并明确提交日志需要写得详细。
+- 用户在归档前选择“同步后归档”，随后要求中英文 README 的测试话术表删除“建议截图名”列，并再次执行 Git 提交。
 
 ## 重要 AI 建议
 
@@ -53,6 +55,7 @@
 - 建议不要仅放大 multipart 限制，而应在文档解析、真实 Token 切分、分片数量和向量批次层同时设置资源预算，并在批次失败时清理同来源残留。
 - 建议 knowledge 模式使用独立系统提示词和不带 Tool 的 ChatClient，降低中文技术文档召回阈值并增加召回数量，避免 ERP 角色提示词覆盖真实知识上下文。
 - 建议 README 的知识库范围与实际“用户导入文档”能力保持一致，并对全部本地示例图片执行引用校验。
+- 建议归档前先把五份 delta spec 同步到主规范，避免最终需求只存在于归档目录；归档后以主规范严格校验和空活动列表确认状态。
 
 ## 开发者决策
 
@@ -71,6 +74,7 @@
 - 采纳文档导入的字符、分片、真实 WordPiece Token 和批次写入多层预算；同租户同来源使用覆盖语义，写入失败执行清理。
 - 采纳 knowledge 专用问答客户端，不受 ERP 业务范围限制，同时继续保留租户隔离和无 Tool 双重隔离。
 - 采纳中英文 README 同步更新和截图重排；顶部环形图不在后续画廊重复，甘特截图固定为 `06-gantt.png`。
+- 采纳先同步再归档，最终 change 保存于日期化归档目录；采纳中英文 README 同步移除建议截图名列，保留 20 种图表话术。
 - 决定默认密码保持不变；决定单体应用不额外处理已提出的并发修改。
 
 ## 已拒绝建议
@@ -97,7 +101,7 @@
 
 ## 最终结果
 
-- OpenSpec：`openspec/changes/tool-result-chart-visualization/` 已包含最终 proposal、design、169 项已完成 tasks 和五份 delta spec，严格校验通过。
+- OpenSpec：五份 delta spec 已同步到主规范；最终 proposal、design、169 项已完成 tasks 和完整 delta specs 已归档至 `openspec/changes/archive/2026-08-01-tool-result-chart-visualization/`。8 份主规范严格校验通过，当前无活动 change。
 - 图表领域：`chat/chart/model`、`capture`、`compile`、`protocol`、`selection`、`tool` 分别承载内部模型、结果捕获、自动规划与编译、历史协议、漏选补选和 LLM 类型/标题选择 Tool。
 - 问答编排：`ErpAssistantService`、`AssistantClientProvider`、`AssistantLifecycleService` 和 `chat.dto` 完成职责拆分，auto/data/knowledge 原能力继续保留。
 - 接口和存储：非流式响应增加可空图表，流式接口统一为类型化 SSE，`a_chat_message.chart_spec` 支持幂等迁移、保存和历史回放。
@@ -105,4 +109,4 @@
 - 前端：本地 ECharts、词云/水位官方扩展和 `chart-adapter.js` 支持 23 类图表；甘特图使用本地水平时间范围渲染，错误事件复用当前助手气泡，并继续支持安全降级、历史回放和实例释放。
 - 安全和兼容：规划输入、结果数据和历史协议具备完整白名单与资源预算；会话按租户和用户隔离；旧消息、非法图表、异常和取消均保留文本回答。
 - 验证：最终 `mvn clean package` 通过 194 项测试并生成制品，前端 33 个 fixture 及新增函数 JSDoc 检查通过，OpenSpec strict 和 `git diff HEAD --check` 通过。
-- 文档与知识库：上传限制为 500MB/550MB，解析和向量导入实施多层预算；knowledge 模式可根据用户导入文档回答非 ERP 问题；中英文 README 包含 20 条测试话术和 6 张不重复示例图。
+- 文档与知识库：上传限制为 500MB/550MB，解析和向量导入实施多层预算；knowledge 模式可根据用户导入文档回答非 ERP 问题；中英文 README 包含 20 条三列测试话术和 6 张不重复示例图，不再展示建议截图名列。

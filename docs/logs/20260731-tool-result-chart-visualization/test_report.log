@@ -1,10 +1,10 @@
 ## 本地验证报告
 
 - Change ID: tool-result-chart-visualization
-- Latest Verify Time: 2026-08-01 14:50:51
-- 变更范围：当前轮业务数据守卫、业务 Tool 结果捕获、LLM 图表类型/标题选择、后端自动字段绑定、23 类 `ChartSpec` 编译与协议校验、非流式和类型化 SSE 响应、图表持久化与历史回放、静态 ECharts 适配、知识文档受控导入与专用问答、会话所有权校验、`ErpAssistantService` 职责拆分、中英文 README、示例截图以及对应 OpenSpec 材料。
-- 关键路径：业务数据问题在当前轮调用 Tool 并捕获真实数据；LLM 只选择单个图表的类型和标题；后端选择来源、绑定字段、生成转换并编译 `ChartSpec`；非流式或流式响应返回文本和可空图表；助手消息保存图表；历史详情和续聊回放；图表失败降级为文本；计费和业务 Tool 统计保持原语义。
-- 高风险场景：跨租户或同租户跨用户访问、LLM 规划携带非法字段或业务数值、超大和深层 JSON、同轮重复图表、流式异常或取消重复收口、历史非法图表、数据库旧结构升级、前端执行不受控配置和图表实例泄漏。
+- Latest Verify Time: 2026-08-01 15:20:29
+- 变更范围：五份 OpenSpec delta spec 同步、`tool-result-chart-visualization` change 归档，以及中英文 README 图表测试话术表删除建议截图名列；本轮未修改运行代码。
+- 关键路径：主规范完整承接已归档 change 的最终需求和场景；归档目录保留 proposal、design、169 项已完成任务及五份 delta spec；中英文 README 各保留 20 条可复制话术并统一为三列表格。
+- 高风险场景：归档前漏同步 delta spec、归档材料丢失、活动 change 残留，以及中英文 README 行数或列结构漂移。
 
 ## 执行记录
 
@@ -18,6 +18,7 @@
 | 2026-08-01 00:34:31 | 英文直接业务查询、多系列联合分组、甘特进度/水平范围、SSE 错误复用定向回归及完整本地门禁 | 通过 |
 | 2026-08-01 13:22:33 | 最终答案标记跨分片净化、业务 Tool JSON 单次解析、Bean 依赖及全部当前变更的完整本地门禁 | 通过 |
 | 2026-08-01 14:50:51 | 知识文档字符/Token/分片/批次预算、knowledge 专用提示词和召回参数、README 双语示例及全部当前变更的完整本地门禁 | 通过 |
+| 2026-08-01 15:20:29 | 8 份主规范严格校验、归档材料和 169 项任务完整性、中英文 README 20 行三列表格结构及 Git 差异检查 | 通过 |
 
 | 类型 | 结论 | 证据 |
 | --- | --- | --- |
@@ -27,10 +28,10 @@
 | 手工验证 | 未执行 | 本轮报告更新未重新进行浏览器操作；前端协议和 23 类图表 option 由 9 项静态契约测试及 `node src/test/resources/chart-adapter-fixtures.js` 的 33 个 fixture 验证。 |
 
 - 前端验证：`node src/test/resources/chart-adapter-fixtures.js`，输出 `chart-adapter fixtures passed: 33`。
-- OpenSpec 验证：`openspec validate tool-result-chart-visualization --strict`，输出 `Change 'tool-result-chart-visualization' is valid`。
+- OpenSpec 验证：`openspec validate --specs --strict`，输出 `8 passed, 0 failed`；`openspec list --json` 输出空 change 列表。
 - 格式检查：`git diff HEAD --check` 退出码 0，仅输出 LF/CRLF 转换提示，无空白错误。
 - 注释检查：新增 `chart-adapter.js` 命名函数及本次新增 `app.js` 方法均具备中文 JSDoc、完整参数和返回值说明。
-- 文档检查：中英文 README 均包含 20 条编号图表话术，顶部示例与 6 张后续截图不重复，全部本地图片引用存在。
+- 文档检查：中英文 README 均包含 20 条编号图表话术，全部为“序号、图表、测试话术”三列，且不再包含“建议截图名 / Suggested Screenshot”表头。
 - 代码卫生检查：排除原样引入的第三方 vendor 后，未发现 `TODO`、`FIXME`、调试输出或已移除 bar-range 扩展残留。
 
 ## 测试用例明细
@@ -58,6 +59,8 @@
 | 通过 | 接口测试 | `GET /api/ask` 文本与可空图表响应 | `ChatControllerTest` 随 Maven 测试执行 | 保留原回答字段并增加可空 `chart` | 相关用例通过 |
 | 通过 | 接口测试 | `GET /api/ask/stream` 类型化 SSE | `ChatControllerTest`、`ErpAssistantStreamTest` 和 `StaticFrontendContractTest` | 每个事件 data 可独立解析，前端按 `delta/chart/done/error` 分派 | 相关用例通过 |
 | 通过 | 接口测试 | 历史详情和续聊图表回放 | `ChatHistoryServiceTest` 和 `StaticFrontendContractTest` | 使用持久化图表，不重新调用助手或业务 Tool | 相关用例通过 |
+| 通过 | 文档验证 | 主规范同步与 change 归档完整性 | `openspec validate --specs --strict`、`openspec list --json` 和归档文件检查 | 8 份主规范有效、无活动 change，proposal/design/tasks/specs 完整保留 | 8/8 通过，169/169 任务完成，归档材料无缺失 |
+| 通过 | 文档验证 | 中英文 README 图表话术表结构 | PowerShell 逐行统计并校验 Markdown 列数和已移除表头 | 两份 README 各 20 行、每行 3 列，不含建议截图名列 | 两份 README 均通过 |
 | 未执行 | 手工验证 | 浏览器桌面和窄屏页面实际交互 | 本轮未执行浏览器操作 | 文本、图表、历史和停止回答交互正常 | 当前仅有自动化契约和 fixture 证据 |
 
-- 残余风险：英文业务意图采用可审计的受限问句与业务对象词表，未命中的新表达需要后续扩充；浏览器实际甘特视觉、错误气泡、知识库实库召回和桌面/窄屏交互未在本轮重新手工确认，当前结论来自完整 Java 测试、静态契约和 Node fixture。
+- 残余风险：本轮没有运行时代码变化，未重复执行 Maven、Node 或浏览器操作；既有 194 项 Java 测试和 33 个前端 fixture 结果继续作为实现证据，本轮新增的规范同步、归档和 README 结构均已完成针对性验证。
