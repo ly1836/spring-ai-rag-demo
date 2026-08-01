@@ -23,14 +23,15 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
 	@Select("""
 		SELECT message_id AS messageId, role, content, mode, model,
 		prompt_tokens AS promptTokens, completion_tokens AS completionTokens, total_tokens AS totalTokens,
-		tool_calls AS toolCalls, tool_calls_count AS toolCallsCount, rag_doc_count AS ragDocCount,
+		tool_calls AS toolCalls, tool_calls_count AS toolCallsCount, chart_spec AS chartSpec,
+		rag_doc_count AS ragDocCount,
 		duration_ms AS durationMs, status, error_message AS errorMessage,
 		DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS createdAt
 		FROM a_chat_message
 		WHERE conversation_id = #{conversationId}
 		ORDER BY created_at ASC
 		""")
-	List<ConversationVO.ChatMessageItemResponse> selectMessageItems(@Param("conversationId") String conversationId);
+	List<ConversationVO.ChatMessageRecord> selectMessageItems(@Param("conversationId") String conversationId);
 
 	/**
 	 * 查询最近成功消息，。Spring AI ChatMemory 使用。

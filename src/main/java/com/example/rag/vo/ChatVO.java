@@ -71,8 +71,44 @@ public final class ChatVO {
 	 * @param question       用户原始问题
 	 * @param answer         LLM 生成的回答
 	 * @param mode           实际使用的回答模式
+	 * @param chart          LLM 选择并由后端编译的图表，无图表时为空
 	 */
-	public record AskResponse(String conversationId, String question, String answer, String mode) {
+	public record AskResponse(String conversationId, String question, String answer, String mode,
+			ChartVO.ChartSpec chart) {
+	}
+
+	/**
+	 * 类型化 SSE 文本增量事件。
+	 *
+	 * @param text 本次文本增量
+	 */
+	public record StreamDelta(String text) {
+	}
+
+	/**
+	 * 类型化 SSE 图表事件。
+	 *
+	 * @param chart 本轮唯一图表
+	 */
+	public record StreamChart(ChartVO.ChartSpec chart) {
+	}
+
+	/**
+	 * 类型化 SSE 完成事件。
+	 *
+	 * @param conversationId 会话 ID
+	 * @param status         完成状态
+	 */
+	public record StreamDone(String conversationId, String status) {
+	}
+
+	/**
+	 * 类型化 SSE 错误事件。
+	 *
+	 * @param code    稳定错误码
+	 * @param message 安全错误信息
+	 */
+	public record StreamError(String code, String message) {
 	}
 
 	/**

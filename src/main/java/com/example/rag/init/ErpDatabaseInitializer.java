@@ -112,6 +112,7 @@ public class ErpDatabaseInitializer implements ApplicationRunner {
 	public void initialize() {
 		log.info("开始初始化 ERP MySQL 表结构和演示数据");
 		executeScript(CONVERSATION_BILLING_SCRIPT);
+		ensureChatMessageChartSpecColumn();
 		executeScript(BUSINESS_DATA_SCRIPT);
 		log.info("ERP MySQL 表结构和演示数据初始化完成");
 	}
@@ -452,6 +453,21 @@ public class ErpDatabaseInitializer implements ApplicationRunner {
 			this.valuesSql = valuesSql;
 		}
 
+	}
+
+	/**
+	 * 确保已有对话消息表包含图表字段。
+	 */
+	private void ensureChatMessageChartSpecColumn() {
+		Integer count = erpJdbcTemplate.queryForObject(
+			"SELECT COUNT(1) FROM information_schema.COLUMNS "
+				+ "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+			Integer.class, "a_chat_message", "chart_spec");
+		if (count == null || count == 0) {
+			log.info("检测到对话消息表缺少图表字段，开始执行幂等升级");
+			erpJdbcTemplate.execute("ALTER TABLE a_chat_message ADD COLUMN chart_spec TEXT NULL "
+				+ "COMMENT '助手图表数据（ChartSpec JSON，最大60KiB）' AFTER tool_calls_count");
+		}
 	}
 
 }

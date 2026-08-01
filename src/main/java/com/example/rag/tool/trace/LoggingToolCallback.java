@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.example.rag.chat.chart.capture.ToolResultRecorder;
 import com.example.rag.config.TenantContext;
 import com.example.rag.dao.entity.ToolCallLogEntity;
 import com.alibaba.fastjson2.JSON;
@@ -35,6 +36,9 @@ public class LoggingToolCallback implements ToolCallback {
 	/** Tool 调用流水服务。 */
 	private final ToolCallLogService logService;
 
+	/** 业务 Tool 结果记录器。 */
+	private final ToolResultRecorder toolResultRecorder;
+
 	/**
 	 * 创建 ToolCallback 日志包装器。
 	 *
@@ -42,13 +46,15 @@ public class LoggingToolCallback implements ToolCallback {
 	 * @param toolType     Tool 来源类型
 	 * @param recorder     Tool 调用聚合记录器
 	 * @param logService   Tool 调用流水服务
+	 * @param toolResultRecorder 业务 Tool 结果记录器
 	 */
 	public LoggingToolCallback(ToolCallback delegate, String toolType, ToolCallRecorder recorder,
-			ToolCallLogService logService) {
+			ToolCallLogService logService, ToolResultRecorder toolResultRecorder) {
 		this.delegate = delegate;
 		this.toolType = toolType;
 		this.recorder = recorder;
 		this.logService = logService;
+		this.toolResultRecorder = toolResultRecorder;
 	}
 
 	/**
@@ -102,6 +108,7 @@ public class LoggingToolCallback implements ToolCallback {
 			String result = delegate.call(toolInput, toolContext);
 			long durationMs = System.currentTimeMillis() - startTime;
 			recordCall(traceId, context, toolName, toolInput, result, durationMs, "success", null);
+			captureToolResult(traceId, context, toolName, result);
 			return result;
 		}
 		catch (RuntimeException ex) {
@@ -253,6 +260,27 @@ public class LoggingToolCallback implements ToolCallback {
 		entity.setStatus(status);
 		entity.setErrorMessage(errorMessage);
 		return entity;
+	}
+
+	/**
+	 * 将成功业务 Tool 结果交给图表记录器，捕获失败不影响原 Tool 返回。
+	 *
+	 * @param traceId  问答链路 ID
+	 * @param context  Tool 上下文
+	 * @param toolName Tool 名称
+	 * @param result   Tool 返回结果
+	 */
+	private void captureToolResult(String traceId, Map<String, Object> context, String toolName, String result) {
+		try {
+			toolResultRecorder.capture(traceId,
+				contextValue(context, "entCode", TenantContext.getEntCode()),
+				contextValue(context, "conversationId", null),
+				toolName, toolType, result);
+		}
+		catch (Exception ex) {
+			log.warn("图表结果捕获失败: traceId={}, toolName={}, error={}",
+				traceId, toolName, ex.getMessage());
+		}
 	}
 
 }

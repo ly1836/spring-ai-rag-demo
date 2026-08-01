@@ -1,0 +1,63 @@
+## 本地验证报告
+
+- Change ID: tool-result-chart-visualization
+- Latest Verify Time: 2026-08-01 14:50:51
+- 变更范围：当前轮业务数据守卫、业务 Tool 结果捕获、LLM 图表类型/标题选择、后端自动字段绑定、23 类 `ChartSpec` 编译与协议校验、非流式和类型化 SSE 响应、图表持久化与历史回放、静态 ECharts 适配、知识文档受控导入与专用问答、会话所有权校验、`ErpAssistantService` 职责拆分、中英文 README、示例截图以及对应 OpenSpec 材料。
+- 关键路径：业务数据问题在当前轮调用 Tool 并捕获真实数据；LLM 只选择单个图表的类型和标题；后端选择来源、绑定字段、生成转换并编译 `ChartSpec`；非流式或流式响应返回文本和可空图表；助手消息保存图表；历史详情和续聊回放；图表失败降级为文本；计费和业务 Tool 统计保持原语义。
+- 高风险场景：跨租户或同租户跨用户访问、LLM 规划携带非法字段或业务数值、超大和深层 JSON、同轮重复图表、流式异常或取消重复收口、历史非法图表、数据库旧结构升级、前端执行不受控配置和图表实例泄漏。
+
+## 执行记录
+
+| 时间 | 验证范围 | 结论 |
+| --- | --- | --- |
+| 2026-07-31 19:01:33 | `AssistantBeanDependencyTest`、`ChartCompilerTest`、`ChartSpecCodecTest`、`ChartPlanToolCallbackTest` 定向回归 | 通过 |
+| 2026-07-31 19:02:24 | 完整 Maven 测试、33 个前端图表 fixture、OpenSpec 严格校验和 Git 差异检查 | 通过 |
+| 2026-07-31 19:05:55 | 单独重新执行完整打包及全部本地门禁，目标类和制品均正常生成 | 通过 |
+| 2026-08-01 00:04:17 | 英文业务数据守卫、水位图自动范围和静态前端契约定向测试，以及 33 个前端 fixture | 通过 |
+| 2026-08-01 00:07:59 | 完整 Maven 测试、OpenSpec 严格校验、前端 JSDoc 结构检查和 Git 差异检查 | 通过 |
+| 2026-08-01 00:34:31 | 英文直接业务查询、多系列联合分组、甘特进度/水平范围、SSE 错误复用定向回归及完整本地门禁 | 通过 |
+| 2026-08-01 13:22:33 | 最终答案标记跨分片净化、业务 Tool JSON 单次解析、Bean 依赖及全部当前变更的完整本地门禁 | 通过 |
+| 2026-08-01 14:50:51 | 知识文档字符/Token/分片/批次预算、knowledge 专用提示词和召回参数、README 双语示例及全部当前变更的完整本地门禁 | 通过 |
+
+| 类型 | 结论 | 证据 |
+| --- | --- | --- |
+| 单元测试 | 通过 | `mvn clean package`；Surefire 汇总 `Tests run: 194, Failures: 0, Errors: 0, Skipped: 0`。 |
+| 集成测试 | 通过 | 完整 Maven 测试中的问答生命周期、消息持久化、计费、Tool 记录、数据库幂等迁移、历史回放和 Bean 依赖协作测试全部通过。 |
+| 接口测试 | 通过 | `ChatControllerTest` 5 项 MockMvc/Controller 契约测试、`RespVOJacksonCompatibilityTest`、`StaticFrontendContractTest` 9 项静态接口契约测试通过；类型化 SSE 和历史图表回放入口均有断言。 |
+| 手工验证 | 未执行 | 本轮报告更新未重新进行浏览器操作；前端协议和 23 类图表 option 由 9 项静态契约测试及 `node src/test/resources/chart-adapter-fixtures.js` 的 33 个 fixture 验证。 |
+
+- 前端验证：`node src/test/resources/chart-adapter-fixtures.js`，输出 `chart-adapter fixtures passed: 33`。
+- OpenSpec 验证：`openspec validate tool-result-chart-visualization --strict`，输出 `Change 'tool-result-chart-visualization' is valid`。
+- 格式检查：`git diff HEAD --check` 退出码 0，仅输出 LF/CRLF 转换提示，无空白错误。
+- 注释检查：新增 `chart-adapter.js` 命名函数及本次新增 `app.js` 方法均具备中文 JSDoc、完整参数和返回值说明。
+- 文档检查：中英文 README 均包含 20 条编号图表话术，顶部示例与 6 张后续截图不重复，全部本地图片引用存在。
+- 代码卫生检查：排除原样引入的第三方 vendor 后，未发现 `TODO`、`FIXME`、调试输出或已移除 bar-range 扩展残留。
+
+## 测试用例明细
+
+| 结论 | 类型 | 测试用例 | 执行方式 | 期望结果 | 实际结果 |
+| --- | --- | --- | --- | --- | --- |
+| 通过 | 单元测试 | `ChartCompilerTest` 28 项：23 类图表、聚合排序、分箱、箱线统计、层级/桑基、单位、范围、派生字段、日期形普通类目 | `mvn test` | 所有合法规划生成受约束 `ChartSpec`，非法类型、通道和边界被拒绝 | 28 项全部通过 |
+| 通过 | 单元测试 | `ToolResultRecorderTest` 10 项：结果形状、容量预算、显式空结果、单次解析、租户会话边界、首个图表、trace 隔离和终止清理 | `mvn clean package` | 只保留可信且有界的当前链路数据，接近上限的 JSON 不重复解析，失败不影响文本回答 | 10 项全部通过 |
+| 通过 | 单元测试 | `ChartPlanToolCallbackTest` 9 项：两字段严格 Schema、首个有效规划、未知字段、来源边界和输入资源预算 | `mvn test` | LLM 只能提交类型和标题，不能绕过后端校验或覆盖已接受图表 | 9 项全部通过 |
+| 通过 | 单元测试 | `BusinessDataTurnGuardTest` 7 项：当前轮结果、有界重试、实时流式、英文及中英混合业务数据问题 | `mvn test` | 自动/数据模式不得复用历史业务数字，英文数据问题同样进入当前轮守卫 | 7 项全部通过 |
+| 通过 | 单元测试 | `ChartPlanFactoryTest` 7 项：23 类自动规划、纯分类计数、水位范围、自定义多系列联合分组、重复类目和甘特进度 | `mvn clean package` | 标题明确时绑定系列并保留各组及重复类目数据，甘特只绑定 0～1 可信进度 | 7 项全部通过 |
+| 通过 | 单元测试 | `BusinessDataTurnGuardTest.shouldRecognizeEnglishBusinessDataQuestionsInAutoMode` | `mvn clean package` | 英文直接订单请求进入守卫，产品安装和规格说明不误判 | 断言全部通过 |
+| 通过 | 单元测试 | `ChartSpecCodecTest` 9 项：版本、类型、行数、encoding、历史值类型、options、雷达上界和日期格式 | `mvn test` | 合法历史图表可回放，非法数据安全降级 | 9 项全部通过 |
+| 通过 | 单元测试 | `AssistantBeanDependencyTest.shouldKeepAssistantBeanDependenciesAcyclic` | `mvn test` | 本次新增和拆分的 Spring Bean 构造器依赖图无环 | 测试通过，未发现循环依赖 |
+| 通过 | 单元测试 | `AssistantAnswerSanitizerTest` 11 项：最终答案标记跨分片、所有合法非空前缀、英文旁白、正常正文和终止收口 | `mvn clean package` | 协议标记和内部旁白不进入回答，异常或取消时不泄漏标记残片，合法正文保持完整 | 11 项全部通过 |
+| 通过 | 单元测试 | `DocumentLoaderServiceTest` 4 项：真实 WordPiece Token 上限、同租户同来源覆盖、超长文本拒绝和第二批写入失败清理 | `mvn clean package` | 每个分片不超过 128 Token，资源超限前置拒绝，批次失败不留下半成品向量 | 4 项全部通过 |
+| 通过 | 集成测试 | `ErpAssistantServiceTest.shouldPassConversationIdAndDisableToolsInKnowledgeMode` | `mvn clean package` | knowledge 模式使用专用提示词、8 条/0.25 召回、租户过滤且不暴露业务 Tool | 相关断言全部通过 |
+| 通过 | 单元测试 | 前端 23 类图表、共享碰撞数据、CRLF 分片、未知协议和危险文本 fixture | `node src/test/resources/chart-adapter-fixtures.js` | 适配器生成声明式安全 option，边界输入可降级 | 33 个 fixture 全部通过 |
+| 通过 | 单元测试 | 甘特图时间横轴、任务纵轴、水平范围和完成进度 fixture | `node src/test/resources/chart-adapter-fixtures.js` | 不依赖温度范围扩展，任务范围宽度大于高度且进度正确叠加 | fixture 通过 |
+| 通过 | 接口测试 | SSE 错误复用当前助手气泡静态契约 | `StaticFrontendContractTest` 随 Maven 构建执行 | 已创建助手消息时不再新增重复错误气泡 | 相关契约断言通过 |
+| 通过 | 集成测试 | `ErpAssistantNonStreamingChartTest`：有图保存和计费一次、图表保存失败后文本降级 | `mvn test` | 文本与图表正确返回，失败重试不重复消息、Tool 回填或扣费 | 3 项全部通过 |
+| 通过 | 集成测试 | `ErpAssistantStreamTest`：实时 `delta → chart → done`、标记分片、安全 error、取消保存部分文本 | `mvn clean package` | 成功、异常、取消均只收口一次，最终答案标记不泄漏，失败和取消不发送或保存图表 | 7 项全部通过 |
+| 通过 | 集成测试 | `ChatHistoryServiceTest`：图表持久化、旧消息、非法历史数据、租户和用户所有权 | `mvn test` | 历史可回放合法图表，旧数据降级，越权读取和归档被拒绝 | 13 项全部通过 |
+| 通过 | 集成测试 | `ErpDatabaseInitializerTest`：空库字段、已有库加列和重复启动 | `mvn test` | `chart_spec` 可空字段可幂等创建或升级 | 6 项全部通过 |
+| 通过 | 接口测试 | `GET /api/ask` 文本与可空图表响应 | `ChatControllerTest` 随 Maven 测试执行 | 保留原回答字段并增加可空 `chart` | 相关用例通过 |
+| 通过 | 接口测试 | `GET /api/ask/stream` 类型化 SSE | `ChatControllerTest`、`ErpAssistantStreamTest` 和 `StaticFrontendContractTest` | 每个事件 data 可独立解析，前端按 `delta/chart/done/error` 分派 | 相关用例通过 |
+| 通过 | 接口测试 | 历史详情和续聊图表回放 | `ChatHistoryServiceTest` 和 `StaticFrontendContractTest` | 使用持久化图表，不重新调用助手或业务 Tool | 相关用例通过 |
+| 未执行 | 手工验证 | 浏览器桌面和窄屏页面实际交互 | 本轮未执行浏览器操作 | 文本、图表、历史和停止回答交互正常 | 当前仅有自动化契约和 fixture 证据 |
+
+- 残余风险：英文业务意图采用可审计的受限问句与业务对象词表，未命中的新表达需要后续扩充；浏览器实际甘特视觉、错误气泡、知识库实库召回和桌面/窄屏交互未在本轮重新手工确认，当前结论来自完整 Java 测试、静态契约和 Node fixture。

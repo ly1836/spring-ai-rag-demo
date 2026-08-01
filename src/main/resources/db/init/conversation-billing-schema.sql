@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS a_chat_message (
     total_tokens        INT           NOT NULL DEFAULT 0 COMMENT '总 token 数',
     tool_calls          TEXT                   COMMENT '工具调用记录（JSON 数组）',
     tool_calls_count    INT           NOT NULL DEFAULT 0 COMMENT '工具调用次数',
+    chart_spec          TEXT                   COMMENT '助手图表数据（ChartSpec JSON，最大60KiB）',
     rag_doc_count       INT           NOT NULL DEFAULT 0 COMMENT 'RAG 检索文档数',
     duration_ms         INT                    COMMENT '响应耗时（毫秒）',
     status              VARCHAR(10)   NOT NULL DEFAULT 'success' COMMENT '状态: success/error/timeout',
