@@ -4,7 +4,7 @@ English | [中文](README.md)
 
 A manufacturing ERP AI assistant built with Spring AI, integrating **Tool Calling** (real-time business data queries) and **RAG** (retrieval over user-imported knowledge documents). Supports multi-model switching, streaming chat, conversation memory, multi-tenant isolation, billing management, dynamic Tool management, Tool call tracing, and business data chart visualization.
 
-![Screenshot](doc/img.png)
+![Demo](doc/img.gif)
 
 ## Tech Stack
 
