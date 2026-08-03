@@ -140,7 +140,7 @@ docker compose up -d
 $env:DEEPSEEK_API_KEY="你的DeepSeekKey"
 $env:DASHSCOPE_API_KEY="你的DashScopeKey"
 $env:GOOGLE_GENAI_API_KEY="你的GeminiKey"
-$env:ERP_DB_PASSWORD=""你的mysql密码""
+$env:ERP_DB_PASSWORD="你的mysql密码"
 
 docker compose up -d
 ```
@@ -458,3 +458,7 @@ com.example.rag
     ├── ChatVO / ConversationVO / BillingVO / AdminVO / RespVO
     └── ChartVO                     # 前后端通用版本化图表协议
 ```
+
+## License
+
+该项目已获得许可 [Apache License 2.0](LICENSE).

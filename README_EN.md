@@ -399,3 +399,6 @@ com.example.rag
     ├── ChatVO / ConversationVO / BillingVO / AdminVO / RespVO
     └── ChartVO                     # Versioned chart protocol shared by backend and frontend
 ```
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
