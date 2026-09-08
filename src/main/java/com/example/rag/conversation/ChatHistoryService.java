@@ -6,12 +6,14 @@ import java.util.UUID;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.rag.chat.chart.protocol.ChartSpecCodec;
 import com.example.rag.chat.output.AssistantAnswerSanitizer;
+import com.example.rag.chat.rag.RagCitationCodec;
 import com.example.rag.config.TenantContext;
 import com.example.rag.dao.entity.ChatConversationEntity;
 import com.example.rag.dao.entity.ChatMessageEntity;
 import com.example.rag.dao.mapper.ChatConversationMapper;
 import com.example.rag.dao.mapper.ChatMessageMapper;
 import com.example.rag.vo.ConversationVO;
+import com.example.rag.vo.ChatVO;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,12 +54,17 @@ public class ChatHistoryService {
 	/** 助手最终答案净化器。 */
 	private final AssistantAnswerSanitizer answerSanitizer;
 
+	/** RAG 引用快照编解码器。 */
+	private final RagCitationCodec ragCitationCodec;
+
 	public ChatHistoryService(ChatConversationMapper conversationMapper, ChatMessageMapper messageMapper,
-			ChartSpecCodec chartSpecCodec, AssistantAnswerSanitizer answerSanitizer) {
+			ChartSpecCodec chartSpecCodec, AssistantAnswerSanitizer answerSanitizer,
+			RagCitationCodec ragCitationCodec) {
 		this.conversationMapper = conversationMapper;
 		this.messageMapper = messageMapper;
 		this.chartSpecCodec = chartSpecCodec;
 		this.answerSanitizer = answerSanitizer;
+		this.ragCitationCodec = ragCitationCodec;
 	}
 
 	// ==================== 事务化组合方法 ====================
@@ -385,19 +392,115 @@ public class ChatHistoryService {
 	 */
 	private ConversationVO.ChatMessageItemResponse toMessageItem(ConversationVO.ChatMessageRecord record) {
 		com.example.rag.vo.ChartVO.ChartSpec chart = null;
+		List<ChatVO.CitationResponse> citations = List.of();
 		try {
 			chart = chartSpecCodec.decode(record.chartSpec());
 		}
 		catch (IllegalArgumentException ex) {
 			log.warn("解析历史消息图表失败: messageId={}, error={}", record.messageId(), ex.getMessage());
 		}
+		try {
+			citations = this.ragCitationCodec.decode(record.ragCitations());
+		}
+		catch (IllegalArgumentException ex) {
+			log.warn("解析历史消息引用失败，已按空引用返回: messageId={}, error={}",
+				record.messageId(), ex.getMessage());
+		}
 		String content = "assistant".equals(record.role())
 			? this.answerSanitizer.sanitize(record.content()) : record.content();
 		return new ConversationVO.ChatMessageItemResponse(
 			record.messageId(), record.role(), content, record.mode(), record.model(),
 			record.promptTokens(), record.completionTokens(), record.totalTokens(),
-			record.toolCalls(), record.toolCallsCount(), chart, record.ragDocCount(),
+			record.toolCalls(), record.toolCallsCount(), chart, record.knowledgeBaseId(),
+			record.ragDocCount(), citations,
 			record.durationMs(), record.status(), record.errorMessage(), record.createdAt());
+	}
+
+	/**
+	 * 保存带不可变 RAG 证据快照的成功助手消息并更新会话统计。
+	 *
+	 * @param conversationId   会话 ID
+	 * @param content          回答文本
+	 * @param mode             问答模式
+	 * @param model            模型名称
+	 * @param promptTokens     输入 Token 数
+	 * @param completionTokens 输出 Token 数
+	 * @param totalTokens      总 Token 数
+	 * @param toolCalls        Tool 调用 JSON
+	 * @param toolCallsCount   Tool 调用次数
+	 * @param chartSpec        可空图表 JSON
+	 * @param knowledgeBaseId  实际知识库 ID
+	 * @param ragDocCount      合格召回分片数
+	 * @param citations        经验证引用
+	 * @param durationMs       响应耗时
+	 * @return 助手消息 ID
+	 */
+	@Transactional(transactionManager = "erpTransactionManager")
+	public String saveAssistantMessageWithEvidenceAndUpdateStats(String conversationId,
+			String content, String mode, String model, int promptTokens, int completionTokens,
+			int totalTokens, String toolCalls, int toolCallsCount, String chartSpec,
+			String knowledgeBaseId, int ragDocCount, List<ChatVO.CitationResponse> citations,
+			Integer durationMs) {
+		String citationsJson = this.ragCitationCodec.encode(citations);
+		String messageId = saveMessageWithEvidence(conversationId, content, mode, model,
+			promptTokens, completionTokens, totalTokens, toolCalls, toolCallsCount, chartSpec,
+			knowledgeBaseId, ragDocCount, citationsJson, durationMs);
+		try {
+			updateConversationStats(conversationId);
+		}
+		catch (Exception ex) {
+			log.warn("更新会话统计失败（证据消息已保存）: conversationId={}, error={}",
+				conversationId, ex.getMessage());
+		}
+		return messageId;
+	}
+
+	/**
+	 * 插入一条带 RAG 证据快照的成功助手消息。
+	 *
+	 * @param conversationId   会话 ID
+	 * @param content          回答文本
+	 * @param mode             问答模式
+	 * @param model            模型名称
+	 * @param promptTokens     输入 Token 数
+	 * @param completionTokens 输出 Token 数
+	 * @param totalTokens      总 Token 数
+	 * @param toolCalls        Tool 调用 JSON
+	 * @param toolCallsCount   Tool 调用次数
+	 * @param chartSpec        可空图表 JSON
+	 * @param knowledgeBaseId  实际知识库 ID
+	 * @param ragDocCount      合格召回分片数
+	 * @param citationsJson    引用快照 JSON
+	 * @param durationMs       响应耗时
+	 * @return 助手消息 ID
+	 */
+	private String saveMessageWithEvidence(String conversationId, String content, String mode,
+			String model, int promptTokens, int completionTokens, int totalTokens,
+			String toolCalls, int toolCallsCount, String chartSpec, String knowledgeBaseId,
+			int ragDocCount, String citationsJson, Integer durationMs) {
+		String messageId = UUID.randomUUID().toString();
+		ChatMessageEntity entity = new ChatMessageEntity();
+		entity.setMessageId(messageId);
+		entity.setConversationId(conversationId);
+		entity.setEntCode(TenantContext.requireEntCode());
+		entity.setUserId(TenantContext.getUserIdOrDefault());
+		entity.setRole("assistant");
+		entity.setContent(content);
+		entity.setMode(mode);
+		entity.setKnowledgeBaseId(knowledgeBaseId);
+		entity.setModel(model);
+		entity.setPromptTokens(promptTokens);
+		entity.setCompletionTokens(completionTokens);
+		entity.setTotalTokens(totalTokens);
+		entity.setToolCalls(toolCalls);
+		entity.setToolCallsCount(toolCallsCount);
+		entity.setChartSpec(chartSpec);
+		entity.setRagDocCount(ragDocCount);
+		entity.setRagCitations(citationsJson);
+		entity.setDurationMs(durationMs);
+		entity.setStatus("success");
+		this.messageMapper.insert(entity);
+		return messageId;
 	}
 
 }

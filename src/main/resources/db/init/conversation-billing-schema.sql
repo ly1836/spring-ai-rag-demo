@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS a_chat_message (
     role                VARCHAR(15)   NOT NULL COMMENT '角色: user/assistant/system',
     content             TEXT                   COMMENT '消息内容',
     mode                VARCHAR(20)            COMMENT '问答模式: auto/data/knowledge',
+    knowledge_base_id   VARCHAR(36)            COMMENT '知识问答实际使用的知识库ID',
     model               VARCHAR(50)            COMMENT '使用的模型名称（如 deepseek-chat）',
     prompt_tokens       INT           NOT NULL DEFAULT 0 COMMENT '提示词 token 数',
     completion_tokens   INT           NOT NULL DEFAULT 0 COMMENT '生成回答 token 数',
@@ -80,6 +81,7 @@ CREATE TABLE IF NOT EXISTS a_chat_message (
     tool_calls_count    INT           NOT NULL DEFAULT 0 COMMENT '工具调用次数',
     chart_spec          TEXT                   COMMENT '助手图表数据（ChartSpec JSON，最大60KiB）',
     rag_doc_count       INT           NOT NULL DEFAULT 0 COMMENT 'RAG 检索文档数',
+    rag_citations       JSON                   COMMENT 'RAG 引用快照（最大32KiB）',
     duration_ms         INT                    COMMENT '响应耗时（毫秒）',
     status              VARCHAR(10)   NOT NULL DEFAULT 'success' COMMENT '状态: success/error/timeout',
     error_message       VARCHAR(500)           COMMENT '错误信息（失败时记录）',
@@ -89,6 +91,47 @@ CREATE TABLE IF NOT EXISTS a_chat_message (
     INDEX idx_ent_user (ent_code, user_id),
     INDEX idx_created_at (created_at)
 ) COMMENT '对话消息表';
+
+-- 知识库表
+CREATE TABLE IF NOT EXISTS a_knowledge_base (
+    id                  BIGINT AUTO_INCREMENT PRIMARY KEY,
+    knowledge_base_id   VARCHAR(36)   NOT NULL COMMENT '知识库ID（UUID）',
+    ent_code            VARCHAR(32)   NOT NULL COMMENT '租户编码',
+    name                VARCHAR(100)  NOT NULL COMMENT '知识库名称',
+    description         VARCHAR(500)           COMMENT '知识库说明',
+    status              VARCHAR(10)   NOT NULL DEFAULT 'active' COMMENT '状态: active/inactive/deleted',
+    is_default          TINYINT(1)    NOT NULL DEFAULT 0 COMMENT '是否默认知识库',
+    created_by          VARCHAR(32)            COMMENT '创建人用户ID',
+    created_at          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_ent_knowledge_base (ent_code, knowledge_base_id),
+    INDEX idx_ent_status (ent_code, status),
+    INDEX idx_ent_default (ent_code, is_default)
+) COMMENT '租户知识库表';
+
+-- 知识文档版本表（同一 document_id 的每个版本各占一行）
+CREATE TABLE IF NOT EXISTS a_knowledge_document (
+    id                  BIGINT AUTO_INCREMENT PRIMARY KEY,
+    document_id         VARCHAR(36)   NOT NULL COMMENT '稳定文档ID（UUID）',
+    knowledge_base_id   VARCHAR(36)   NOT NULL COMMENT '所属知识库ID',
+    ent_code            VARCHAR(32)   NOT NULL COMMENT '租户编码',
+    source_name         VARCHAR(255)  NOT NULL COMMENT '文档来源名称',
+    content_type        VARCHAR(100)           COMMENT '文件内容类型',
+    size_bytes          BIGINT                 COMMENT '文件大小（字节）',
+    checksum_sha256     VARCHAR(64)            COMMENT '文件SHA-256摘要',
+    embedding_model     VARCHAR(150)           COMMENT '成功入库使用的嵌入模型身份',
+    version             INT           NOT NULL COMMENT '文档版本号',
+    status              VARCHAR(12)   NOT NULL COMMENT '状态: processing/ready/failed/superseded/deleted',
+    chunk_count         INT           NOT NULL DEFAULT 0 COMMENT '实际入库分片数',
+    error_message       VARCHAR(500)           COMMENT '安全错误摘要',
+    created_by          VARCHAR(32)            COMMENT '创建人用户ID',
+    created_at          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_ent_document_version (ent_code, document_id, version),
+    INDEX idx_ent_base_status (ent_code, knowledge_base_id, status),
+    INDEX idx_ent_base_source (ent_code, knowledge_base_id, source_name),
+    INDEX idx_ent_document (ent_code, document_id)
+) COMMENT '知识文档版本表';
 
 -- ==========================================================
 -- 3. Token 用量统计

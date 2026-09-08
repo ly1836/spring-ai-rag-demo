@@ -1,0 +1,61 @@
+## 本地验证报告
+
+- Change ID: knowledge-base-citations-and-rag-evaluation
+- Latest Verify Time: 2026-09-08 23:50:29
+- 变更范围：知识库与文档版本管理、受管 RAG 检索和引用、非流式/SSE/历史协议、隔离评测、数据库初始化、静态前端、迁移说明、主规范同步、OpenSpec 归档和 change 记录；Dockerfile 与 docker-compose 保持原样，当前提交范围共 132 个文件。
+- 关键路径：默认知识库创建和读取；知识库 CRUD；文档三阶段导入、替换失败保护、模型身份持久化和删除；旧 `ready` 文档重新导入提示；auto/knowledge 受管 RAG；data 模式无向量访问；同轮引用校验；SSE 成功/异常/取消；历史引用回放；评测报告与硬门禁。
+- 高风险场景：跨租户或跨知识库召回、旧模型或失败/非当前版本向量进入答案、数据库状态与真实检索能力不一致、伪造引用、流式重复收口或重复计费、失败导入覆盖上一可用版本、评测清理失败误报通过和默认库热点行锁。
+
+## 执行记录
+
+| 时间 | 验证范围 | 结论 |
+| --- | --- | --- |
+| 2026-09-08 15:41:49 | 完整离线 Maven 测试，覆盖当前主代码、Controller、静态前端契约、知识库、RAG、历史、SSE 和评测算法 | 通过 |
+| 2026-09-08 15:47:23 | 单独执行 Spring Bean 构造器依赖图测试 | 通过 |
+| 2026-09-08 15:41:40 | 当前 change OpenSpec 严格校验和 Git 空白检查 | 通过 |
+| 2026-09-08 15:55:33 | 最终代码、OpenSpec 更新和三份日志暂存范围及空白检查 | 通过 |
+| 2026-09-08 19:52:53 | 嵌入模型身份、数据库补列、重新导入标识和前端提示专项测试 | 通过 |
+| 2026-09-08 20:08:29 | 完整离线 Maven 回归，覆盖 50 个测试类、342 项测试 | 通过 |
+| 2026-09-08 20:05:10 | 重建本地容器，验证数据库升级、静态资源、两份旧文档重新导入及渠道/JVM/RabbitMQ 检索 | 通过 |
+| 2026-09-08 21:42:12 | 复核本轮 Surefire 报告、模型与分词器资源测试、Spring Bean 依赖测试及当前暂存范围 | 通过 |
+| 2026-09-08 23:21:25 | 复核完整本地 Maven 343 项测试报告，并定向执行短 TXT 导入、模型与分词器资源及 Bean 依赖共 10 项测试；同时复核 LFS 对象、OpenSpec、Git 差异和发布说明 | 通过 |
+| 2026-09-08 23:50:29 | 主规范同步和 change 归档后重新执行完整 Maven 测试，复核 11 份主规范、122 项归档任务、LFS 对象和 Git 暂存内容；同时验证本地镜像标签与容器启动 | 通过 |
+
+| 类型 | 结论 | 证据 |
+| --- | --- | --- |
+| 单元测试 | 通过 | `mvn test`；Surefire 汇总 50 个测试类、343 个测试，`Failures: 0, Errors: 0, Skipped: 0`。 |
+| 集成测试 | 通过 | 本地 Docker 环境完成应用重建、MySQL 幂等补列、PgVector 文档替换和受管检索。 |
+| 接口测试 | 通过 | MockMvc 契约测试通过；本地接口确认旧文档先返回 `requiresReindex=true`，两份文档重导后均为 `false`，三个代表性中文查询均返回正确来源。 |
+| 手工验证 | 通过 | 当前代码已重新构建本地 `4.0.0` 镜像，`latest` 指向同一镜像；应用容器重建后启动成功、无真实 ERROR、重启次数为 0，首页返回 HTTP 200。 |
+
+## 测试用例明细
+
+| 结论 | 类型 | 测试用例 | 执行方式 | 期望结果 | 实际结果 |
+| --- | --- | --- | --- | --- | --- |
+| 通过 | 单元测试 | 全量 Java 离线回归 | `mvn test` | 默认测试无需数据库和模型 Key，全部测试通过 | 50 个测试类、343 项测试全部通过，0 失败、0 错误、0 跳过 |
+| 通过 | 单元测试 | `DocumentLoaderServiceTest.shouldExtractShortUtf8TextFromManagedFile`：有效短 TXT 文件流导入 | `mvn test` | 短文档不足分片器最小长度时仍保留非空正文并生成一个受管分片 | 真实 UTF-8 短文本生成 1 个分片，未再出现“未提取到可入库文本” |
+| 通过 | 单元测试 | `EmbeddingModelResourceTest`：ONNX 模型、分词器、Git LFS 指针、固定哈希和中文分词加载 | `mvn test` | 模型和分词器均已完整下载到本地，资源不是 LFS 指针占位文件，哈希与运行时加载符合配置 | 2 项全部通过；当前 Surefire 汇总无失败、无错误 |
+| 通过 | 单元测试 | `AssistantBeanDependencyTest`：新增知识库、RAG、导入和 Controller Bean 依赖图 | `mvn -q -Dtest=AssistantBeanDependencyTest test` | 构造器依赖不存在闭环 | 1 项通过，进程退出码 0 |
+| 通过 | 单元测试 | `KnowledgeDocumentIngestionServiceTest`：三阶段导入、向量故障、参数边界、版本状态冲突和迟到版本清理 | `mvn test` | 基础设施故障为系统错误；参数和业务错误保持原语义；上一可用版本不被误删 | 6 项全部通过 |
+| 通过 | 单元测试 | `KnowledgeDocumentServiceTest`：成功版本模型身份、旧文档重新导入标识和可引用版本过滤 | `mvn -q '-Dtest=KnowledgeDocumentServiceTest,ErpDatabaseInitializerTest,StaticFrontendContractTest' test` | 成功版本记录当前模型；旧模型版本不可引用并提示重新导入 | 10 项全部通过 |
+| 通过 | 单元测试 | `ErpDatabaseInitializerTest`：新表字段与旧表幂等补列 | `mvn test` | 新建表包含 `embedding_model`，旧表缺列时安全补列，重复启动不再次修改表结构 | 11 项全部通过 |
+| 通过 | 单元测试 | `KnowledgeBaseServiceTest`：默认库首次创建、重复默认标记修复、创建锁、聚合统计和健康读取 | `mvn test` | 健康读取不锁租户行，异常修复和写入仍加锁 | 10 项全部通过 |
+| 通过 | 单元测试 | RAG 生产组件：Advisor、资格过滤、上下文、证据提取和引用校验 | `mvn test` | 只保留当前租户、知识库和 `ready` 当前版本；非法编号、代码字面量和超限引用被拒绝 | 19 项全部通过 |
+| 通过 | 单元测试 | RAG 离线评测算法、数据集、拒答/关键事实识别、报告和构建契约 | `mvn test` | 数据集和指标可重复；用例失败、引用错误和清理失败进入硬门禁；普通测试保持本地执行 | 63 项全部通过 |
+| 通过 | 单元测试 | `ChatHistoryServiceTest`：知识库 ID、引用快照、旧消息和坏 JSON | `mvn test` | 历史直接回放快照，不访问向量库；坏数据降级为空引用 | 16 项全部通过 |
+| 通过 | 单元测试 | `ErpAssistantServiceTest`、`ErpAssistantStreamTest`、`ErpAssistantNonStreamingChartTest` | `mvn test` | auto/knowledge 使用受管 RAG，data 不访问向量库；流式和非流式最多结算一次 | 18 项全部通过 |
+| 通过 | 接口测试 | `ChatControllerTest`：三种问答模式、搜索、SSE 与可选知识库参数 | `mvn test` 中 MockMvc/Controller 契约测试 | 请求正确路由，新增字段兼容，响应结构符合约定 | 7 项全部通过 |
+| 通过 | 接口测试 | `KnowledgeBaseControllerTest`：知识库列表、创建、文档上传与错误映射 | `mvn test` 中 MockMvc 测试 | 成功响应使用 `RespVO`；参数、业务和系统错误分类正确且不泄露内部原因 | 9 项全部通过 |
+| 通过 | 接口测试 | `StaticFrontendContractTest`：统一 API、知识库/文档请求顺序、重新导入提示、SSE 确认和引用安全渲染 | `mvn test` | 旧模型文档显示“需重新导入”；过期响应不覆盖当前范围；只有 `done` 后提交引用和图表 | 17 项全部通过 |
+| 通过 | 集成测试 | 旧模型文档状态迁移与重新导入 | Docker 重建后调用知识库文档列表及两次 `PUT .../content` | 升级后旧记录明确提示重新导入，使用原文件替换后状态恢复可用 | 渠道文档版本 2、220 分片；PDF 版本 3、1474 分片；两者 `requiresReindex=false` |
+| 通过 | 接口测试 | 中文检索：渠道方案、JVM 复制算法、RabbitMQ 消息队列 | 本地 `/api/search`，`knowledgeBaseId=dda11a60-295a-4123-9b42-088a9e709eb6` | 返回当前模型生成的正确文档分片，不再空召回或串到无关来源 | 三个查询均返回目标来源；渠道首条 0.6484、JVM 首条 0.7245、RabbitMQ 首条 0.7357 |
+| 通过 | 手工验证 | 已部署静态资源和文档列表状态 | 读取 `http://localhost:8080/`、`app.js?v=35` 和文档列表响应 | 新版脚本已加载，旧模型状态和重新导入提示可用 | `IndexUsesV35=True`、`HasReindexFlag=True`、`HasReindexText=True`；重导后列表状态正确 |
+| 通过 | 手工验证 | 当前本地镜像标签及应用容器 | `docker build`、`docker tag`、Compose 强制重建应用容器并访问 `http://localhost:8080/` | `4.0.0` 与 `latest` 使用同一新镜像，数据库容器和数据卷不重建，应用正常启动 | 两个标签均指向 `sha256:aa8c1c0bdbce...`；`rag-demo` 重启次数 0、启动 ERROR 0、首页 HTTP 200；MySQL 与 PgVector 保持 healthy |
+
+- 规格验证：`openspec validate --all --strict --no-interactive`，11 份主规范全部通过，0 失败；当前无活动 change。
+- OpenSpec 任务：归档目录中的 `tasks.md` 共 122 项，122/122 项完成。
+- 格式检查：`git diff --cached --check` 退出码 0，无空白错误。
+- Bean 依赖：新增依赖方向保持为 Controller → 编排/知识服务 → RAG/文档服务 → Mapper/VectorStore，没有反向依赖。
+- 本地资源：ONNX 模型和分词器均已完整下载并通过 Git LFS 对象、固定 SHA-256、模型会话创建及中文分词校验。
+- 提交前敏感信息检查：当前暂存内容未发现真实私钥、常见云服务 Token、JWT、URL 内嵌凭据或敏感文件；本地 `.env` 已被 `.gitignore` 排除且未暂存。
+- 残余风险：Dockerfile 按用户决定保持通用 Maven 打包流程，镜像构建使用 `-DskipTests`；提交门禁已在宿主机单独完整执行 `mvn -q test`，50 个测试类、343 项测试全部通过。模型和分词器完整性依赖发布前 LFS 对象检查与 `EmbeddingModelResourceTest`，当前两项检查均已通过。

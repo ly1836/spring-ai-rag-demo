@@ -37,6 +37,18 @@ let currentConversationId = null;
 let loadedHints = null;
 /** 当前选中的模型 ID */
 let currentModelId = '';
+/** 当前租户可见的知识库列表 */
+let knowledgeBases = [];
+/** 当前问答、搜索和上传使用的知识库 ID */
+let currentKnowledgeBaseId = '';
+/** 历史续聊中已不可用且禁止静默回退的知识库 ID */
+let unavailableHistoricalKnowledgeBaseId = '';
+/** 知识库列表加载序号，用于忽略租户切换后的过期响应 */
+let knowledgeBaseLoadSequence = 0;
+/** 文档列表加载序号，用于忽略同一租户和知识库中的过期响应 */
+let knowledgeDocumentLoadSequence = 0;
+/** 文档搜索请求序号，用于忽略租户或知识库切换后的过期响应 */
+let documentSearchSequence = 0;
 /** 当前流式请求的 AbortController */
 let currentStreamController = null;
 /** 当前流式回复对应的气泡 DOM */
@@ -69,7 +81,7 @@ let chartResizeFrame = null;
 function getEntCode() {
   const sel = document.getElementById('entCodeSelect');
   if (sel.value === '__custom__') {
-    return document.getElementById('entCodeCustom').value.trim() || 'ENT001';
+    return document.getElementById('entCodeCustom').value.trim();
   }
   return sel.value;
 }
@@ -83,6 +95,32 @@ function onEntCodeChange() {
   const custom = document.getElementById('entCodeCustom');
   custom.style.display = sel.value === '__custom__' ? 'inline' : 'none';
   if (sel.value === '__custom__') custom.focus();
+  // 租户切换后立即使旧请求和旧知识库状态失效。
+  knowledgeBaseLoadSequence++;
+  if (!getEntCode()) {
+    resetKnowledgeBaseState('请输入自定义租户编码', '请输入自定义租户编码后加载知识库');
+    return;
+  }
+  resetKnowledgeBaseState('知识库加载中...', '正在加载当前租户知识库...');
+  loadKnowledgeBases();
+}
+
+/**
+ * 自定义租户编码变更后重新加载对应租户的知识库。
+ * 空编码时重置页面，加载失败时由知识库加载流程显示错误状态。
+ *
+ * @returns {void} 无返回值
+ */
+function onCustomEntCodeChange() {
+  if (document.getElementById('entCodeSelect').value !== '__custom__') return;
+  // 输入值变化后使旧请求失效，避免旧租户响应覆盖当前页面。
+  knowledgeBaseLoadSequence++;
+  if (!getEntCode()) {
+    resetKnowledgeBaseState('请输入自定义租户编码', '请输入自定义租户编码后加载知识库');
+    return;
+  }
+  resetKnowledgeBaseState('知识库加载中...', '正在加载当前租户知识库...');
+  loadKnowledgeBases();
 }
 
 /** 构造请求 Headers，附带租户和用户标识 */
@@ -218,6 +256,362 @@ async function apiDelete(url) {
   return apiCall(url, { method: 'DELETE' });
 }
 
+// ============================================================
+//  知识库和文档管理
+// ============================================================
+
+/**
+ * 清空内存中的知识库状态并显示当前提示。
+ *
+ * @param {string} selectText 知识库下拉框提示
+ * @param {string} documentText 文档区域提示
+ * @returns {void} 无返回值
+ */
+function resetKnowledgeBaseState(selectText, documentText) {
+  knowledgeBases = [];
+  currentKnowledgeBaseId = '';
+  unavailableHistoricalKnowledgeBaseId = '';
+  // 租户状态重置时同时使旧文档列表请求失效。
+  knowledgeDocumentLoadSequence++;
+  // 租户状态重置时同时使旧搜索失效，避免旧范围结果回写页面。
+  documentSearchSequence++;
+  const select = document.getElementById('knowledgeBaseSelect');
+  if (select) {
+    select.replaceChildren();
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = selectText;
+    select.appendChild(option);
+  }
+  const container = document.getElementById('knowledgeDocuments');
+  if (container) container.textContent = documentText;
+  const searchContainer = document.getElementById('searchResults');
+  if (searchContainer) {
+    searchContainer.innerHTML = '<p class="placeholder-text">请输入关键词搜索文档</p>';
+  }
+}
+
+/**
+ * 加载当前租户知识库，并可恢复历史会话指定的知识库。
+ * 请求失败时清空旧知识库状态并显示错误提示。
+ *
+ * @param {string} preferredKnowledgeBaseId 优先选择的知识库 ID
+ * @param {boolean} requireActiveSelection 是否仅允许恢复启用中的历史知识库
+ * @returns {Promise<void>} 加载完成后的 Promise
+ */
+async function loadKnowledgeBases(preferredKnowledgeBaseId, requireActiveSelection) {
+  const select = document.getElementById('knowledgeBaseSelect');
+  if (!select) return;
+  const requestedEntCode = getEntCode();
+  const requestSequence = ++knowledgeBaseLoadSequence;
+  if (!requestedEntCode) {
+    resetKnowledgeBaseState('请输入自定义租户编码', '请输入自定义租户编码后加载知识库');
+    return;
+  }
+  try {
+    const data = await apiCall(API + '/knowledge-bases');
+    // 只接受当前租户最后一次列表请求，避免异步响应覆盖新选择。
+    if (requestSequence !== knowledgeBaseLoadSequence || requestedEntCode !== getEntCode()) return;
+    knowledgeBases = (data && data.data) || [];
+    const requestedId = preferredKnowledgeBaseId || currentKnowledgeBaseId;
+    const requested = knowledgeBases.find(function(item) {
+      return item.knowledgeBaseId === requestedId
+        && (!requireActiveSelection || item.status === 'active');
+    });
+    const defaultKnowledgeBase = knowledgeBases.find(function(item) {
+      return item.isDefault && item.status === 'active';
+    });
+    unavailableHistoricalKnowledgeBaseId = requireActiveSelection
+      && preferredKnowledgeBaseId && !requested
+      ? preferredKnowledgeBaseId : '';
+    currentKnowledgeBaseId = requested
+      ? requested.knowledgeBaseId
+      : (unavailableHistoricalKnowledgeBaseId ? '' : (defaultKnowledgeBase?.knowledgeBaseId || ''));
+    select.replaceChildren();
+    if (unavailableHistoricalKnowledgeBaseId) {
+      const unavailableOption = document.createElement('option');
+      unavailableOption.value = '';
+      unavailableOption.textContent = '历史知识库不可用，请重新选择';
+      select.appendChild(unavailableOption);
+    }
+    knowledgeBases.forEach(function(item) {
+      const option = document.createElement('option');
+      option.value = item.knowledgeBaseId;
+      option.textContent = item.name + (item.isDefault ? '（默认）' : '')
+        + (item.status === 'inactive' ? '（已停用）' : '');
+      select.appendChild(option);
+    });
+    select.value = currentKnowledgeBaseId;
+    await loadKnowledgeDocuments();
+  } catch (e) {
+    // 过期请求失败不应清空较新的租户状态。
+    if (requestSequence !== knowledgeBaseLoadSequence || requestedEntCode !== getEntCode()) return;
+    resetKnowledgeBaseState('知识库加载失败', e.message || '知识库加载失败');
+  }
+}
+
+/**
+ * 响应知识库下拉选择并刷新稳定文档列表。
+ * 文档加载失败时由文档列表区域显示错误提示。
+ *
+ * @returns {void} 无返回值
+ */
+function selectKnowledgeBase() {
+  currentKnowledgeBaseId = document.getElementById('knowledgeBaseSelect').value;
+  unavailableHistoricalKnowledgeBaseId = '';
+  // 切换知识库后使旧搜索失效并清空旧范围结果。
+  documentSearchSequence++;
+  const searchContainer = document.getElementById('searchResults');
+  if (searchContainer) {
+    searchContainer.innerHTML = '<p class="placeholder-text">请输入关键词搜索文档</p>';
+  }
+  loadKnowledgeDocuments();
+}
+
+/**
+ * 判断当前知识库是否可以执行检索或写入操作。
+ *
+ * @returns {boolean} 当前知识库存在且状态为启用时返回 true
+ */
+function isCurrentKnowledgeBaseActive() {
+  const selected = knowledgeBases.find(function(item) {
+    return item.knowledgeBaseId === currentKnowledgeBaseId;
+  });
+  return Boolean(selected && selected.status === 'active');
+}
+
+/**
+ * 创建新的租户知识库。
+ * 用户取消输入时直接返回，请求失败时通过 Toast 显示错误。
+ *
+ * @returns {Promise<void>} 创建和列表刷新完成后的 Promise
+ */
+async function createKnowledgeBase() {
+  const name = prompt('请输入知识库名称');
+  if (!name || !name.trim()) return;
+  const description = prompt('请输入知识库说明（可留空）') || '';
+  try {
+    const created = await apiPost(API + '/knowledge-bases', {
+      name: name.trim(), description: description.trim()
+    });
+    currentKnowledgeBaseId = created.knowledgeBaseId;
+    unavailableHistoricalKnowledgeBaseId = '';
+    await loadKnowledgeBases(created.knowledgeBaseId);
+    showToast('知识库已创建');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+/**
+ * 将当前启用知识库设为租户默认库。
+ * 未选择或知识库已停用时提示用户，请求失败时通过 Toast 显示错误。
+ *
+ * @returns {Promise<void>} 默认库更新和列表刷新完成后的 Promise
+ */
+async function setDefaultKnowledgeBase() {
+  if (!currentKnowledgeBaseId) return showToast('请先选择可用知识库', 'error');
+  if (!isCurrentKnowledgeBaseActive()) return showToast('请先启用当前知识库', 'error');
+  try {
+    await apiPut(API + '/knowledge-bases/' + encodeURIComponent(currentKnowledgeBaseId), {
+      isDefault: true
+    });
+    await loadKnowledgeBases(currentKnowledgeBaseId);
+    showToast('默认知识库已更新');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+/**
+ * 启用或停用当前非默认知识库。
+ * 未选择知识库或请求失败时通过 Toast 显示错误。
+ *
+ * @returns {Promise<void>} 状态更新和列表刷新完成后的 Promise
+ */
+async function toggleKnowledgeBaseStatus() {
+  const selected = knowledgeBases.find(function(item) {
+    return item.knowledgeBaseId === currentKnowledgeBaseId;
+  });
+  if (!selected) return showToast('请先选择知识库', 'error');
+  const nextStatus = selected.status === 'active' ? 'inactive' : 'active';
+  try {
+    await apiPut(API + '/knowledge-bases/' + encodeURIComponent(selected.knowledgeBaseId), {
+      status: nextStatus
+    });
+    await loadKnowledgeBases(selected.knowledgeBaseId);
+    showToast(nextStatus === 'active' ? '知识库已启用' : '知识库已停用');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+/**
+ * 删除当前空的非默认知识库。
+ * 未选择、用户取消或服务端拒绝删除时保留现有状态并显示相应提示。
+ *
+ * @returns {Promise<void>} 删除和列表刷新完成后的 Promise
+ */
+async function deleteKnowledgeBase() {
+  if (!currentKnowledgeBaseId) return showToast('请先选择知识库', 'error');
+  if (!confirm('确认删除当前知识库？仅空的非默认库可以删除。')) return;
+  try {
+    await apiDelete(API + '/knowledge-bases/' + encodeURIComponent(currentKnowledgeBaseId));
+    currentKnowledgeBaseId = '';
+    await loadKnowledgeBases();
+    showToast('知识库已删除');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+/**
+ * 加载并安全渲染当前知识库的稳定文档与版本状态。
+ * 请求失败时只在当前租户和知识库对应的文档区域显示错误。
+ *
+ * @returns {Promise<void>} 文档列表加载和渲染完成后的 Promise
+ */
+async function loadKnowledgeDocuments() {
+  const container = document.getElementById('knowledgeDocuments');
+  const requestSequence = ++knowledgeDocumentLoadSequence;
+  container.replaceChildren();
+  if (!currentKnowledgeBaseId) {
+    const placeholder = document.createElement('p');
+    placeholder.className = 'placeholder-text';
+    placeholder.textContent = unavailableHistoricalKnowledgeBaseId
+      ? '历史知识库不可用，请重新选择' : '请选择知识库';
+    container.appendChild(placeholder);
+    return;
+  }
+  const requestedEntCode = getEntCode();
+  const requestedKnowledgeBaseId = currentKnowledgeBaseId;
+  try {
+    const data = await apiCall(API + '/knowledge-bases/'
+      + encodeURIComponent(requestedKnowledgeBaseId) + '/documents');
+    // 只渲染当前租户和知识库中的最后一次文档列表响应。
+    if (requestSequence !== knowledgeDocumentLoadSequence
+        || requestedEntCode !== getEntCode()
+        || requestedKnowledgeBaseId !== currentKnowledgeBaseId) return;
+    const documents = (data && data.data) || [];
+    if (!documents.length) {
+      const placeholder = document.createElement('p');
+      placeholder.className = 'placeholder-text';
+      placeholder.textContent = '暂无文档';
+      container.appendChild(placeholder);
+      return;
+    }
+    documents.forEach(function(documentItem) {
+      container.appendChild(createKnowledgeDocumentCard(documentItem));
+    });
+  } catch (e) {
+    // 过期文档请求失败时保留最新请求正在加载的页面状态。
+    if (requestSequence !== knowledgeDocumentLoadSequence
+        || requestedEntCode !== getEntCode()
+        || requestedKnowledgeBaseId !== currentKnowledgeBaseId) return;
+    container.textContent = e.message || '文档列表加载失败';
+  }
+}
+
+/**
+ * 使用纯 DOM 文本节点创建文档卡片，防止来源名和错误摘要注入页面。
+ *
+ * @param {Object} documentItem 后端返回的稳定文档信息
+ * @returns {HTMLElement} 可直接加入文档列表的卡片元素
+ */
+function createKnowledgeDocumentCard(documentItem) {
+  const card = document.createElement('div');
+  card.className = 'knowledge-document-card';
+  const requiresReindex = documentItem.requiresReindex === true;
+  const title = document.createElement('div');
+  title.className = 'knowledge-document-title';
+  title.textContent = documentItem.sourceName || '未命名文档';
+  const meta = document.createElement('div');
+  meta.className = 'knowledge-document-meta';
+  meta.textContent = 'v' + (documentItem.version || 0) + ' · '
+    + (requiresReindex ? '需重新导入' : formatDocumentStatus(documentItem.status)) + ' · '
+    + (documentItem.chunkCount || 0) + ' 个分片';
+  card.appendChild(title);
+  card.appendChild(meta);
+  if (documentItem.errorMessage) {
+    const error = document.createElement('div');
+    error.className = 'knowledge-document-error';
+    error.textContent = documentItem.errorMessage;
+    card.appendChild(error);
+  }
+  if (requiresReindex) {
+    const reindexNotice = document.createElement('div');
+    reindexNotice.className = 'knowledge-document-error';
+    reindexNotice.textContent = '当前嵌入模型已更新，请重新上传原文件后再用于问答';
+    card.appendChild(reindexNotice);
+  }
+  const actions = document.createElement('div');
+  actions.className = 'knowledge-document-actions';
+  const replaceButton = document.createElement('button');
+  replaceButton.className = 'btn btn-outline btn-sm';
+  replaceButton.textContent = requiresReindex ? '重新导入' : '替换';
+  replaceButton.onclick = function() { replaceKnowledgeDocument(documentItem.documentId); };
+  const deleteButton = document.createElement('button');
+  deleteButton.className = 'btn btn-outline btn-sm';
+  deleteButton.textContent = '删除';
+  deleteButton.onclick = function() { deleteKnowledgeDocument(documentItem.documentId); };
+  actions.appendChild(replaceButton);
+  actions.appendChild(deleteButton);
+  card.appendChild(actions);
+  return card;
+}
+
+/**
+ * 将后端文档版本状态转换为中文。
+ *
+ * @param {string} status 后端文档版本状态
+ * @returns {string} 对应中文状态，未知状态保留原值
+ */
+function formatDocumentStatus(status) {
+  return ({ processing: '处理中', ready: '可用', failed: '失败',
+    superseded: '已替换', deleted: '已删除' })[status] || status || '未知';
+}
+
+/**
+ * 选择替换文件并为稳定文档创建下一版本。
+ * 知识库停用或上传失败时保留当前版本并通过 Toast 显示错误。
+ *
+ * @param {string} documentId 待替换的稳定文档 ID
+ * @returns {void} 无返回值
+ */
+function replaceKnowledgeDocument(documentId) {
+  if (!isCurrentKnowledgeBaseActive()) {
+    showToast('停用的知识库不能替换文档，请先启用', 'error');
+    return;
+  }
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = document.getElementById('fileInput').accept;
+  input.onchange = async function() {
+    if (!input.files || !input.files.length) return;
+    const form = new FormData();
+    form.append('file', input.files[0]);
+    try {
+      await apiCall(API + '/knowledge-bases/' + encodeURIComponent(currentKnowledgeBaseId)
+        + '/documents/' + encodeURIComponent(documentId) + '/content', {
+          method: 'PUT', body: form
+        });
+      await loadKnowledgeDocuments();
+      showToast('文档新版本已导入');
+    } catch (e) { showToast(e.message, 'error'); }
+  };
+  input.click();
+}
+
+/**
+ * 删除稳定文档及其全部受管向量。
+ * 用户取消时不发起请求，删除失败时保留文档并通过 Toast 显示错误。
+ *
+ * @param {string} documentId 待删除的稳定文档 ID
+ * @returns {Promise<void>} 删除和列表刷新完成后的 Promise
+ */
+async function deleteKnowledgeDocument(documentId) {
+  if (!confirm('确认删除该文档及全部版本？')) return;
+  try {
+    await apiDelete(API + '/knowledge-bases/' + encodeURIComponent(currentKnowledgeBaseId)
+      + '/documents/' + encodeURIComponent(documentId));
+    await loadKnowledgeDocuments();
+    await loadKnowledgeBases(currentKnowledgeBaseId);
+    showToast('文档已删除');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
 /** 安全显示表格文本 */
 function safeText(value) {
   if (value == null || value === '') return '-';
@@ -264,6 +658,7 @@ async function loadPresetDocs() {
   try {
     const data = await apiCall(API + '/load', { method: 'POST' });
     showToast('已加载 ' + data.chunksLoaded + ' 个文档片段');
+    await loadKnowledgeBases(currentKnowledgeBaseId);
   } catch (e) { showToast(e.message, 'error'); }
   finally { btn.disabled = false; btn.textContent = '加载预置文档到向量库'; }
 }
@@ -289,21 +684,29 @@ function initUpload() {
 
 /** 文件选中后更新 UI：显示文件名、启用上传按钮 */
 function onFileSelected() {
-  document.getElementById('dropZone').querySelector('p').innerHTML = '&#9989; ' + selectedFile.name;
+  // 文件名来自用户输入，只允许作为文本节点显示。
+  document.getElementById('dropZone').querySelector('p').textContent = '✅ ' + selectedFile.name;
   document.getElementById('btnUpload').disabled = false;
 }
 
 /** 将选中文件上传到向量库（FormData 方式） */
 async function uploadFile() {
   if (!selectedFile) return;
+  if (!currentKnowledgeBaseId || !isCurrentKnowledgeBaseActive()) {
+    showToast('请先选择可用知识库', 'error');
+    return;
+  }
   const btn = document.getElementById('btnUpload');
   btn.disabled = true; btn.textContent = '上传中...';
   const form = new FormData();
   form.append('file', selectedFile);
   try {
-    const data = await apiCall(API + '/upload', { method: 'POST', body: form });
-    showToast(data.filename + ' 已导入 ' + data.chunksLoaded + ' 个片段');
+    const data = await apiCall(API + '/knowledge-bases/'
+      + encodeURIComponent(currentKnowledgeBaseId) + '/documents', { method: 'POST', body: form });
+    showToast((data.sourceName || selectedFile.name) + ' 已导入 ' + data.chunksLoaded + ' 个片段');
     resetUploadArea();
+    await loadKnowledgeDocuments();
+    await loadKnowledgeBases(currentKnowledgeBaseId);
   } catch (e) { showToast(e.message, 'error'); }
   finally { btn.disabled = !selectedFile; btn.textContent = '上传'; }
 }
@@ -321,14 +724,31 @@ function resetUploadArea() {
 //  文档搜索（仅向量检索，不调用 LLM）
 // ============================================================
 
-/** 从向量库搜索相似文档片段，展示相似度评分 */
+/**
+ * 从向量库搜索相似文档片段并展示相似度评分。
+ * 知识库不可用或请求失败时只在当前搜索结果区域显示错误。
+ *
+ * @returns {Promise<void>} 搜索和结果渲染完成后的 Promise
+ */
 async function searchDocs() {
   const q = document.getElementById('searchQuery').value.trim();
   if (!q) return;
   const container = document.getElementById('searchResults');
+  const requestedEntCode = getEntCode();
+  const requestedKnowledgeBaseId = currentKnowledgeBaseId;
+  const requestSequence = ++documentSearchSequence;
   container.innerHTML = '<p class="placeholder-text">搜索中...</p>';
   try {
-    const data = await apiCall(API + '/search?' + new URLSearchParams({ query: q, topK: 5 }));
+    if (!requestedKnowledgeBaseId || !isCurrentKnowledgeBaseActive()) {
+      throw new Error('请先选择可用知识库');
+    }
+    const data = await apiCall(API + '/search?' + new URLSearchParams({
+      query: q, topK: 5, knowledgeBaseId: requestedKnowledgeBaseId
+    }));
+    // 仅渲染当前范围内最后一次搜索，避免旧租户或旧知识库响应覆盖页面。
+    if (requestSequence !== documentSearchSequence
+        || requestedEntCode !== getEntCode()
+        || requestedKnowledgeBaseId !== currentKnowledgeBaseId) return;
     if (!data.results || !data.results.length) {
       container.innerHTML = '<p class="placeholder-text">未找到相关文档</p>'; return;
     }
@@ -336,12 +756,19 @@ async function searchDocs() {
       '<div class="search-result-card">' +
         '<div>' + escapeHtml(r.text).substring(0, 300) + (r.text.length > 300 ? '...' : '') + '</div>' +
         '<div class="meta">' +
-          '<span>&#128196; ' + (r.source || '-') + '</span>' +
+          '<span>&#128196; ' + escapeHtml(r.source || '-') + '</span>' +
           '<span class="score">&#9733; ' + (r.score != null ? (r.score * 100).toFixed(1) + '%' : '-') + '</span>' +
         '</div>' +
       '</div>'
     ).join('');
-  } catch (e) { container.innerHTML = '<p style="color:var(--error);">搜索失败: ' + e.message + '</p>'; }
+  } catch (e) {
+    // 过期请求的失败信息同样不能覆盖当前范围的搜索状态。
+    if (requestSequence !== documentSearchSequence
+        || requestedEntCode !== getEntCode()
+        || requestedKnowledgeBaseId !== currentKnowledgeBaseId) return;
+    container.innerHTML = '<p style="color:var(--error);">搜索失败: '
+      + escapeHtml(e.message || '未知错误') + '</p>';
+  }
 }
 
 // ============================================================
@@ -410,6 +837,43 @@ function addMessage(role, text, mode) {
   container.appendChild(msgDiv);
   container.scrollTop = container.scrollHeight;
   return { message: msgDiv, wrapper: wrapper, bubble: bubble, meta: meta };
+}
+
+/**
+ * 在助手回答下方安全渲染可展开的引用快照。
+ * 来源和摘要只通过 textContent 写入，禁止执行文档中的标签、链接或脚本。
+ * 无有效消息句柄或引用时直接返回，不修改现有回答。
+ *
+ * @param {Object} messageHandle 助手消息及其包装元素句柄
+ * @param {Array<Object>} citations 已通过后端校验的引用快照
+ * @returns {void} 无返回值
+ */
+function renderMessageCitations(messageHandle, citations) {
+  if (!messageHandle || !messageHandle.wrapper || !Array.isArray(citations) || !citations.length) return;
+  const existing = messageHandle.wrapper.querySelector('.citation-list');
+  if (existing) existing.remove();
+  const list = document.createElement('div');
+  list.className = 'citation-list';
+  citations.forEach(function(citation) {
+    const details = document.createElement('details');
+    details.className = 'citation-card';
+    const summary = document.createElement('summary');
+    summary.textContent = '[' + (citation.citationId || '-') + '] '
+      + (citation.source || '未知来源') + ' · v' + (citation.documentVersion || 0);
+    const excerpt = document.createElement('div');
+    excerpt.className = 'citation-excerpt';
+    excerpt.textContent = citation.excerpt || '';
+    const identity = document.createElement('div');
+    identity.className = 'citation-identity';
+    identity.textContent = '文档 ' + (citation.documentId || '-')
+      + ' · 分片 ' + (citation.chunkIndex ?? '-') + ' · '
+      + (citation.score != null ? (citation.score * 100).toFixed(1) + '%' : '无评分');
+    details.appendChild(summary);
+    details.appendChild(excerpt);
+    details.appendChild(identity);
+    list.appendChild(details);
+  });
+  messageHandle.wrapper.insertBefore(list, messageHandle.meta || null);
 }
 
 /**
@@ -544,13 +1008,25 @@ function handleStreamEvent(eventText, state, messageHandle) {
   } else if (parsed.event === 'chart') {
     // 图表先暂存，只有服务端明确发送 done 后才进入页面。
     state.pendingChart = payload.chart || null;
+  } else if (parsed.event === 'citations') {
+    // 引用先暂存，只有服务端明确发送 done 后才进入页面。
+    state.pendingCitations = Array.isArray(payload.citations) ? payload.citations : [];
+    state.knowledgeBaseId = payload.knowledgeBaseId || '';
   } else if (parsed.event === 'done') {
     state.done = true;
+    // done 始终确认本轮实际知识库，引用为空时也能保持会话知识库一致。
+    state.knowledgeBaseId = payload.knowledgeBaseId || state.knowledgeBaseId || '';
+    if (state.pendingCitations && state.pendingCitations.length) {
+      renderMessageCitations(messageHandle, state.pendingCitations);
+      state.pendingCitations = null;
+    }
     if (state.pendingChart) {
       renderMessageChart(messageHandle, state.pendingChart);
       state.pendingChart = null;
     }
   } else if (parsed.event === 'error') {
+    state.pendingCitations = null;
+    state.pendingChart = null;
     throw new Error(payload.message || '回答生成失败');
   }
 }
@@ -593,6 +1069,12 @@ async function sendQuestion() {
 
   const mode = currentMode;
 
+  if (mode !== 'data' && (!currentKnowledgeBaseId || !isCurrentKnowledgeBaseActive())) {
+    showToast(unavailableHistoricalKnowledgeBaseId
+      ? '历史知识库已不可用，请重新选择知识库' : '请先选择可用知识库', 'error');
+    return;
+  }
+
   input.value = '';
   addMessage('user', question, mode);
   addTypingIndicator();
@@ -604,6 +1086,9 @@ async function sendQuestion() {
 
   try {
     const params = new URLSearchParams({ question, mode, modelId: currentModelId });
+    if (mode !== 'data' && currentKnowledgeBaseId) {
+      params.set('knowledgeBaseId', currentKnowledgeBaseId);
+    }
     if (currentConversationId) {
       params.set('conversationId', currentConversationId);
     }
@@ -637,7 +1122,10 @@ async function sendQuestion() {
     currentStreamBubble = bubble;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    const streamState = { fullText: '', done: false, pendingChart: null, pendingCarriageReturn: false };
+    const streamState = {
+      fullText: '', done: false, pendingCitations: null, pendingChart: null,
+      pendingCarriageReturn: false, knowledgeBaseId: ''
+    };
     let sseBuffer = '';
 
     while (true) {
@@ -836,6 +1324,9 @@ async function loadMessages(conversationId) {
     ).join('');
     var historyItems = container.querySelectorAll('.history-msg');
     data.messages.forEach(function(message, index) {
+      if (message.citations && historyItems[index]) {
+        renderMessageCitations({ wrapper: historyItems[index], meta: null }, message.citations);
+      }
       if (message.chart && historyItems[index]) {
         renderMessageChart({ wrapper: historyItems[index], meta: null }, message.chart);
       }
@@ -871,6 +1362,15 @@ async function continueConversation(conversationId) {
   }
   const messages = (data && data.messages) || [];
 
+  // 恢复最后一次成功知识回答使用的知识库；不可用时保留历史但阻止静默回退。
+  const lastKnowledgeMessage = messages.slice().reverse().find(function(message) {
+    return message.role === 'assistant' && message.status === 'success' && message.knowledgeBaseId;
+  });
+  await loadKnowledgeBases(lastKnowledgeMessage ? lastKnowledgeMessage.knowledgeBaseId : undefined, true);
+  if (unavailableHistoricalKnowledgeBaseId) {
+    showToast('历史知识库已停用或删除，请重新选择后继续知识问答', 'error');
+  }
+
   // 切到 AI 对话 Tab
   switchTab('chat');
 
@@ -905,6 +1405,7 @@ async function continueConversation(conversationId) {
     } else {
       const messageHandle = addMessage('assistant', content, m.mode);
       const bubble = messageHandle.bubble;
+      renderMessageCitations(messageHandle, m.citations);
       renderMessageChart(messageHandle, m.chart);
       // cancelled / error 助手消息追加状态角标，与「历史记录」Tab 表达一致
       if (m.status === 'cancelled') {
@@ -1306,6 +1807,7 @@ async function loadModels() {
 document.addEventListener('DOMContentLoaded', () => {
   initUpload();
   resetToolForm();
+  loadKnowledgeBases();
   loadModels();
   loadHints();
   window.addEventListener('resize', resizeMessageCharts);

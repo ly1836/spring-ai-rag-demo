@@ -14,7 +14,7 @@
 | 框架 | Spring Boot | 4.0.7 |
 | AI 框架 | Spring AI | 2.0.0 |
 | 对话模型 | DeepSeek / 通义千问 / Google Gemini | 多模型可切换 |
-| 嵌入模型 | all-MiniLM-L6-v2（ONNX 本地推理） | 384 维向量 |
+| 嵌入模型 | paraphrase-multilingual-MiniLM-L12-v2（ONNX 本地推理） | 支持中文的 384 维向量 |
 | 向量数据库 | PostgreSQL + PgVector | HNSW 索引 |
 | 业务数据库 | MySQL | ERP 业务数据 |
 | 数据访问 | Spring JDBC + MyBatis-Plus | 3.5.16 |
@@ -25,7 +25,7 @@
 
 - **Spring AI Tool Calling** — LLM 自动调用 8 大 ERP 模块的代码 `@Tool` 和数据库动态 Tool 查询 MySQL 实时数据
 - **Tool 结果图表可视化** — LLM 选择图表类型和标题，后端基于当前轮结构化业务数据生成安全的通用图表协议，前端使用本地 ECharts 渲染
-- **Spring AI RAG** — `QuestionAnswerAdvisor` 从 PgVector 检索用户导入的知识文档片段并注入 prompt 上下文
+- **Spring AI RAG** — `RetrievalAugmentationAdvisor` 从 PgVector 检索受管知识库文档片段并注入 prompt 上下文
 - **多模型切换** — 前端下拉框选择模型，后端通过 `ModelRegistry` 路由到对应 provider 的 `ChatModel`
 - **会话记忆** — `MessageChatMemoryAdvisor` + `JdbcChatMemoryRepository` 基于数据库的上下文记忆
 - **多租户隔离** — 所有数据查询和向量检索自动按 `ent_code` 隔离
@@ -186,7 +186,9 @@ docker compose logs -f app
 
 ### 本地构建当前应用镜像
 
-如需把当前代码打成与 docker-compose 默认镜像同名的本地镜像：
+模型和分词器已存放在 `src/main/resources/models/embedding/` 并随应用打包，运行时只从本地 classpath 加载，不会再从远程下载。本地资源测试会校验两个文件的 SHA-256、模型结构和中文分词能力。
+
+如需把当前代码打成 docker-compose 默认使用的本地最新镜像：
 
 ```bash
 docker build -t ly753/spring-ai-rag-demo:latest .
@@ -208,6 +210,19 @@ deploy/
 ```
 
 ## 功能列表
+
+### 知识库与 RAG 增强
+
+| 功能 | 说明 |
+|------|------|
+| 知识库管理 | 支持租户默认知识库、多知识库切换，以及知识库创建、启停和删除 |
+| 文档版本 | 上传和替换生成递增版本，新版本失败时保留上一可用版本 |
+| 受管 RAG | 按租户、知识库、文档状态、当前版本和嵌入模型过滤检索结果 |
+| 回答引用 | 非流式、SSE 和历史消息均可展示本轮实际召回文档的可信引用 |
+| 中文检索 | 本地使用 `paraphrase-multilingual-MiniLM-L12-v2` 模型和分词器，运行时无需下载 |
+| RAG 评测 | 提供版本化评测集以及召回、拒答、引用和隔离检查 |
+
+> 当前受管 RAG 只检索带稳定知识库、文档、版本和当前 `embedding_model` 元数据的新向量。由旧模型生成的向量即使同为 384 维也不能混用，需要通过文档替换或兼容上传入口重新导入。
 
 ### AI 对话
 

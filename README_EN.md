@@ -14,7 +14,7 @@ A manufacturing ERP AI assistant built with Spring AI, integrating **Tool Callin
 | Framework | Spring Boot | 4.0.7 |
 | AI Framework | Spring AI | 2.0.0 |
 | Chat Models | DeepSeek / Qwen (Tongyi) / Google Gemini | Multi-model switchable |
-| Embedding Model | all-MiniLM-L6-v2 (ONNX local inference) | 384-dim vectors |
+| Embedding Model | paraphrase-multilingual-MiniLM-L12-v2 (local ONNX inference) | Chinese-capable, 384-dimensional vectors |
 | Vector Database | PostgreSQL + PgVector | HNSW index |
 | Business Database | MySQL | ERP business data |
 | Data Access | Spring JDBC + MyBatis-Plus | 3.5.16 |
@@ -25,7 +25,7 @@ A manufacturing ERP AI assistant built with Spring AI, integrating **Tool Callin
 
 - **Spring AI Tool Calling** — LLM automatically invokes code `@Tool` methods across 8 ERP modules and database-defined dynamic Tools to query MySQL in real time
 - **Tool Result Chart Visualization** — The LLM selects only the chart type and title; the backend builds a safe, generic chart specification from structured business data returned in the current turn, and the frontend renders it with local ECharts assets
-- **Spring AI RAG** — `QuestionAnswerAdvisor` retrieves snippets from user-imported knowledge documents in PgVector and injects them into the prompt context
+- **Spring AI RAG** — `RetrievalAugmentationAdvisor` retrieves eligible document versions from the selected managed knowledge base in PgVector and injects numbered evidence into the prompt context
 - **Multi-Model Switching** — Frontend dropdown selects a model; backend routes to the corresponding provider's `ChatModel` via `ModelRegistry`
 - **Conversation Memory** — `MessageChatMemoryAdvisor` + `JdbcChatMemoryRepository` for database-backed context memory
 - **Multi-Tenant Isolation** — All data queries and vector searches are automatically filtered by `ent_code`
@@ -119,8 +119,10 @@ docker run -d --name rag-demo \
 
 ### Build Image Locally
 
+The model and tokenizer are stored under `src/main/resources/models/embedding/` and packaged with the application. Runtime loading uses the local classpath and does not download either resource. Local resource tests verify both SHA-256 values, the model structure, and Chinese tokenization behavior.
+
 ```bash
-# Run from project root
+# Run from the project root
 docker build -t ly753/spring-ai-rag-demo:latest .
 ```
 
@@ -146,9 +148,22 @@ deploy/
 docker-compose up -d
 ```
 
-`docker-compose.yml` uses the remote image `ly753/spring-ai-rag-demo:latest` for the application container and starts PgVector and MySQL. MySQL schema and demo data are initialized idempotently by the application on startup; LLM chat still requires at least one real model API key via environment variables.
+`docker-compose.yml` always uses the remote `ly753/spring-ai-rag-demo:latest` image for the application container and starts PgVector and MySQL. MySQL schema and demo data are initialized idempotently by the application on startup; LLM chat still requires at least one real model API key via environment variables.
 
 ## Features
+
+### Knowledge Base and RAG Enhancements
+
+| Feature | Description |
+|---------|-------------|
+| Knowledge base management | Supports a tenant default knowledge base, multiple knowledge bases, switching, creation, enable/disable, and deletion |
+| Document versions | Uploads and replacements create incremental versions while preserving the previous ready version if a new version fails |
+| Managed RAG | Filters retrieval results by tenant, knowledge base, document status, current version, and embedding model |
+| Answer citations | Non-streaming, SSE, and historical messages can display verified citations from the current retrieval |
+| Chinese retrieval | Uses the local `paraphrase-multilingual-MiniLM-L12-v2` model and tokenizer with no runtime download |
+| RAG evaluation | Provides a versioned dataset and checks for retrieval, refusal, citation, and isolation behavior |
+
+> The managed RAG pipeline retrieves only vectors carrying stable knowledge-base, document, version, and current `embedding_model` metadata. Vectors created by the previous model cannot be mixed with the current model even when both are 384-dimensional; re-import source documents through replacement or the compatibility upload endpoints.
 
 ### AI Chat
 

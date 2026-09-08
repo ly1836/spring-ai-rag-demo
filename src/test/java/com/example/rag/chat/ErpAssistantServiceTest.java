@@ -18,6 +18,9 @@ import com.example.rag.chat.dto.ChatAnswerResult;
 import com.example.rag.chat.guard.BusinessDataTurnGuard;
 import com.example.rag.chat.lifecycle.AssistantLifecycleService;
 import com.example.rag.chat.output.AssistantAnswerSanitizer;
+import com.example.rag.chat.rag.RagAnswerResult;
+import com.example.rag.chat.rag.RagAnswerService;
+import com.example.rag.chat.rag.RagRequestContext;
 import com.example.rag.config.ModelProperties.ModelItem;
 import com.example.rag.config.TenantContext;
 import com.example.rag.conversation.ChatHistoryService;
@@ -44,12 +47,16 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
+import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
+import org.springframework.ai.rag.retrieval.search.DocumentRetriever;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
@@ -104,7 +111,7 @@ class ErpAssistantServiceTest {
 		TenantContext.setEntCode("ENT001");
 
 		ChatAnswerResult answer =
-			service.askKnowledge("当前问题", "c1", "deepseek-chat", true);
+			service.askKnowledge("当前问题", "c1", "deepseek-chat", true, "");
 
 		assertThat(answer.answer()).isEqualTo("模型回答");
 		assertThat(answer.chart()).isNull();
@@ -252,12 +259,17 @@ class ErpAssistantServiceTest {
 			toolRegistryService, new ToolCallRecorder(), mock(ToolCallLogService.class));
 		TenantContext.setEntCode("ENT001");
 
-		service.ask("再按状态统计近期售后工单", "c1", "deepseek-chat", true);
+		service.ask("再按状态统计近期售后工单", "c1", "deepseek-chat", true, "kb-default");
 
 		assertThat(chatModel.callCount).isEqualTo(2);
 		assertThat(chatModel.lastPrompt.getInstructions().toString())
 			.contains("上一次回答没有取得本轮业务查询结果")
 			.contains("再按状态统计近期售后工单");
+		RagAnswerService ragAnswerService =
+			(RagAnswerService) ReflectionTestUtils.getField(service, "ragAnswerService");
+		verify(ragAnswerService).prepare(
+			"kb-default", "再按状态统计近期售后工单", 5, 0.5);
+		verify(ragAnswerService).complete(anyString(), any(ChatResponse.class), any(RagRequestContext.class));
 		verify(memoryRepository, atLeastOnce()).findByConversationId("c1");
 	}
 
@@ -352,12 +364,36 @@ class ErpAssistantServiceTest {
 			builder, modelRegistry, toolRegistryService, planTool);
 		ChartSelectionService chartSelectionService = new ChartSelectionService(
 			clientProvider, planTool, toolResultRecorder);
+		RagAnswerService ragAnswerService = mock(RagAnswerService.class);
+		SearchRequest knowledgeSearchRequest = SearchRequest.builder()
+			.query("")
+			.topK(8)
+			.similarityThreshold(0.25)
+			.filterExpression(new FilterExpressionBuilder().eq("ent_code", "ENT001").build())
+			.build();
+		DocumentRetriever retriever = query -> vectorStore.similaritySearch(
+			SearchRequest.from(knowledgeSearchRequest).query(query.text()).build());
+		RetrievalAugmentationAdvisor ragAdvisor = RetrievalAugmentationAdvisor.builder()
+			.documentRetriever(retriever)
+			.queryAugmenter((query, documents) -> query)
+			.build();
+		RagRequestContext ragContext = new RagRequestContext("kb-default", ragAdvisor, retriever);
+		when(ragAnswerService.prepare(any(), anyString(), eq(5), eq(0.5))).thenReturn(ragContext);
+		when(ragAnswerService.prepare(any(), anyString(), eq(8), eq(0.25))).thenReturn(ragContext);
+		when(ragAnswerService.complete(anyString(), any(ChatResponse.class), eq(ragContext)))
+			.thenAnswer(invocation -> new RagAnswerResult(
+				invocation.getArgument(0), "kb-default", List.of(), List.of()));
+		when(historyService.saveAssistantMessageWithEvidenceAndUpdateStats(
+			anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt(),
+			any(), anyInt(), nullable(String.class), anyString(), anyInt(), anyList(), any()))
+			.thenReturn("assistant-msg");
 		AssistantLifecycleService lifecycleService = new AssistantLifecycleService(
 			historyService, billingService, toolCallRecorder, toolCallLogService,
-			toolResultRecorder, codec, new AssistantAnswerSanitizer(), chartSelectionService);
+			toolResultRecorder, codec, new AssistantAnswerSanitizer(), chartSelectionService,
+			ragAnswerService);
 		return new ErpAssistantService(
-			clientProvider, lifecycleService, vectorStore, memoryRepository, toolRegistryService,
-			new BusinessDataTurnGuard(toolResultRecorder, toolCallRecorder));
+			clientProvider, lifecycleService, memoryRepository, toolRegistryService,
+			new BusinessDataTurnGuard(toolResultRecorder, toolCallRecorder), ragAnswerService);
 	}
 
 	/**

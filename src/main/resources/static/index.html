@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ERP 智能助手</title>
-  <link rel="stylesheet" href="style.css?v=12">
+  <link rel="stylesheet" href="style.css?v=13">
   <link rel="stylesheet" href="vendor/highlight-github.min.css?v=1">
 </head>
 <body>
@@ -26,7 +26,8 @@
         <option value="ENT003">ENT003 - 试用企业（免费版）</option>
         <option value="__custom__">自定义...</option>
       </select>
-      <input type="text" id="entCodeCustom" placeholder="输入租户编码" style="display:none;">
+      <input type="text" id="entCodeCustom" placeholder="输入租户编码" style="display:none;"
+             onchange="onCustomEntCodeChange()">
       <label>用户</label>
       <input type="text" id="userId" value="U002" placeholder="X-User-Id">
     </div>
@@ -37,6 +38,21 @@
     <div class="main">
       <!-- 左侧边栏 -->
       <div class="sidebar">
+        <div class="sidebar-section knowledge-base-panel">
+          <h3>&#128218; 知识库</h3>
+          <select id="knowledgeBaseSelect" onchange="selectKnowledgeBase()">
+            <option value="">加载中...</option>
+          </select>
+          <div class="knowledge-actions">
+            <button class="btn btn-outline btn-sm" onclick="createKnowledgeBase()">新建</button>
+            <button class="btn btn-outline btn-sm" onclick="setDefaultKnowledgeBase()">设默认</button>
+            <button class="btn btn-outline btn-sm" onclick="toggleKnowledgeBaseStatus()">启停</button>
+            <button class="btn btn-outline btn-sm" onclick="deleteKnowledgeBase()">删除</button>
+          </div>
+          <div class="knowledge-documents" id="knowledgeDocuments">
+            <p class="placeholder-text">请选择知识库</p>
+          </div>
+        </div>
         <div class="sidebar-section">
           <h3>&#128218; 文档管理</h3>
           <button class="btn btn-outline btn-block" onclick="loadPresetDocs()" id="btnLoad">加载预置文档到向量库</button>
@@ -210,6 +226,6 @@
   <script src="vendor/marked.min.js?v=1"></script>
   <script src="vendor/highlight.min.js?v=1"></script>
   <script src="chart-adapter.js?v=9"></script>
-  <script src="app.js?v=26"></script>
+  <script src="app.js?v=35"></script>
 </body>
 </html>

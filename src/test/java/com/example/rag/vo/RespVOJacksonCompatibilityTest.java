@@ -30,7 +30,7 @@ class RespVOJacksonCompatibilityTest {
 				null, null, "元", null, null),
 			new ChartVO.ChartSource(List.of("query_sales")));
 		RespVO<ChatVO.AskResponse> response = RespVO.success(
-			new ChatVO.AskResponse("c1", "问题", "回答", "data", chart));
+			new ChatVO.AskResponse("c1", "问题", "回答", "data", chart, null, List.of(), 0));
 
 		String json = mapper.writeValueAsString(response);
 

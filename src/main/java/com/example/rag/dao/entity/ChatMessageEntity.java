@@ -39,6 +39,9 @@ public class ChatMessageEntity {
 	/** 问答模式。*/
 	private String mode;
 
+	/** 知识问答实际使用的知识库 ID。*/
+	private String knowledgeBaseId;
+
 	/** 使用的模型名称。*/
 	private String model;
 
@@ -62,6 +65,9 @@ public class ChatMessageEntity {
 
 	/** RAG 检索文档数。*/
 	private Integer ragDocCount;
+
+	/** RAG 引用快照 JSON。*/
+	private String ragCitations;
 
 	/** 响应耗时，单位毫秒。*/
 	private Integer durationMs;

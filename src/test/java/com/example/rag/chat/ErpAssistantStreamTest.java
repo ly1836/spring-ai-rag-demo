@@ -11,29 +11,36 @@ import com.example.rag.chat.chart.selection.ChartSelectionService;
 import com.example.rag.chat.dto.ChatStreamFrame;
 import com.example.rag.chat.lifecycle.AssistantLifecycleService;
 import com.example.rag.chat.output.AssistantAnswerSanitizer;
+import com.example.rag.chat.rag.RagAnswerService;
+import com.example.rag.chat.rag.RagAnswerResult;
+import com.example.rag.chat.rag.RagRequestContext;
 import com.example.rag.config.TenantContext;
 import com.example.rag.conversation.ChatHistoryService;
 import com.example.rag.tool.trace.ToolCallLogService;
 import com.example.rag.tool.trace.ToolCallRecorder;
 import com.example.rag.vo.ChartVO;
+import com.example.rag.vo.ChatVO;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.document.Document;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -80,7 +87,7 @@ class ErpAssistantStreamTest {
 	}
 
 	/**
-	 * 验证流内异常只输出安全 error，不发布图表或 done，也不扣费。
+	 * 验证流内异常只输出安全 error，不发布图表或 done，并结算已观测用量。
 	 */
 	@Test
 	public void shouldEmitSafeErrorWithoutChartOrBilling() {
@@ -102,8 +109,8 @@ class ErpAssistantStreamTest {
 			eq("c1"), eq("部分文本"), eq("data"), eq("test-model"),
 			anyInt(), anyInt(), anyInt(), nullable(String.class), anyInt(),
 			isNull(), anyInt(), any(), eq("error"), eq("上游敏感异常"));
-		verify(harness.billingService(), never()).deductForTokenUsage(
-			anyInt(), anyInt(), anyInt(), anyString(), anyString());
+		verify(harness.billingService()).deductForTokenUsage(
+			anyInt(), anyInt(), anyInt(), eq("test-model"), eq("c1"));
 	}
 
 	/**
@@ -144,11 +151,13 @@ class ErpAssistantStreamTest {
 			anyInt(), anyInt(), anyInt(), nullable(String.class), anyInt(),
 			nullable(String.class), anyInt(), any(), anyString(), nullable(String.class)))
 			.thenReturn("assistant-message");
+		RagAnswerService ragAnswerService = mock(RagAnswerService.class);
 		AssistantLifecycleService lifecycleService = new AssistantLifecycleService(
 			historyService, billingService, new ToolCallRecorder(),
 			mock(ToolCallLogService.class), recorder, codec, new AssistantAnswerSanitizer(),
-			mock(ChartSelectionService.class));
-		return new TestHarness(lifecycleService, historyService, billingService, recorder);
+			mock(ChartSelectionService.class), ragAnswerService);
+		return new TestHarness(lifecycleService, historyService, billingService, recorder,
+			ragAnswerService);
 	}
 
 	/**
@@ -180,7 +189,10 @@ class ErpAssistantStreamTest {
 	 * @return 模型响应
 	 */
 	private ChatResponse response(String text) {
-		return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+		ChatResponseMetadata metadata = ChatResponseMetadata.builder()
+			.usage(new DefaultUsage(2, 3, 5))
+			.build();
+		return new ChatResponse(List.of(new Generation(new AssistantMessage(text))), metadata);
 	}
 
 	/**
@@ -194,7 +206,7 @@ class ErpAssistantStreamTest {
 	private Flux<ChatStreamFrame> invokeStream(
 			AssistantLifecycleService lifecycleService, Flux<ChatResponse> upstream, String traceId) {
 		return lifecycleService.recordStream(
-			upstream, "测试问题", "c1", "data", "test-model-id", "test-model", traceId);
+			upstream, "测试问题", "c1", "data", "test-model-id", "test-model", traceId, null);
 	}
 
 	/**
@@ -207,7 +219,8 @@ class ErpAssistantStreamTest {
 	 */
 	private record TestHarness(AssistantLifecycleService lifecycleService,
 			ChatHistoryService historyService,
-			BillingService billingService, ToolResultRecorder recorder) {
+			BillingService billingService, ToolResultRecorder recorder,
+			RagAnswerService ragAnswerService) {
 	}
 
 	/**
@@ -302,6 +315,65 @@ class ErpAssistantStreamTest {
 			eq("c1"), eq(""), eq("data"), eq("test-model"),
 			anyInt(), anyInt(), anyInt(), nullable(String.class), anyInt(),
 			isNull(), anyInt(), any(), eq("cancelled"), isNull());
+	}
+
+	/**
+	 * 验证 knowledge 成功流按 delta、citations、done 顺序发布并保存同一引用快照。
+	 */
+	@Test
+	public void shouldEmitAndPersistVerifiedCitationsBeforeDone() {
+		TestHarness harness = buildHarness();
+		RagRequestContext context = new RagRequestContext("kb-1", null, null);
+		Document document = new Document("证据");
+		List<Document> documents = List.of(document);
+		List<ChatVO.CitationResponse> citations = List.of(new ChatVO.CitationResponse(
+			1, "kb-1", "doc-1", 2, "chunk-1", 0, "manual.pdf", "证据", 0.9));
+		when(harness.ragAnswerService().extractEvidence(any(ChatResponse.class))).thenReturn(documents);
+		when(harness.ragAnswerService().completeFromDocuments("回答 [1]", documents, context))
+			.thenReturn(new RagAnswerResult("回答 [1]", "kb-1", documents, citations));
+		when(harness.historyService().saveAssistantMessageWithEvidenceAndUpdateStats(
+			anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt(),
+			any(), anyInt(), nullable(String.class), anyString(), anyInt(), anyList(), any()))
+			.thenReturn("assistant-message");
+		TenantContext.setEntCode("ENT001");
+		TenantContext.setUserId("U001");
+
+		List<ChatStreamFrame> frames = harness.lifecycleService().recordStream(
+			Flux.just(response("<!--FINAL_ANSWER-->回答 [1]")), "测试问题", "c1", "knowledge",
+			"test-model-id", "test-model", "t1", context).collectList().block();
+
+		assertThat(frames).extracting(ChatStreamFrame::event)
+			.containsExactly("delta", "citations", "done");
+		assertThat(((ChatVO.StreamCitations) frames.get(1).data()).citations()).isEqualTo(citations);
+		assertThat(((ChatVO.StreamDone) frames.get(2).data()).knowledgeBaseId()).isEqualTo("kb-1");
+		verify(harness.historyService()).saveAssistantMessageWithEvidenceAndUpdateStats(
+			eq("c1"), eq("回答 [1]"), eq("knowledge"), eq("test-model"),
+			anyInt(), anyInt(), anyInt(), nullable(String.class), eq(0), isNull(),
+			eq("kb-1"), eq(1), eq(citations), any());
+	}
+
+	/**
+	 * 验证无引用的 RAG 成功流仍在 done 事件返回实际知识库 ID。
+	 */
+	@Test
+	public void shouldIncludeKnowledgeBaseInDoneWhenCitationsAreEmpty() {
+		TestHarness harness = buildHarness();
+		RagRequestContext context = new RagRequestContext("kb-1", null, null);
+		when(harness.ragAnswerService().completeFromDocuments("回答", List.of(), context))
+			.thenReturn(new RagAnswerResult("回答", "kb-1", List.of(), List.of()));
+		when(harness.historyService().saveAssistantMessageWithEvidenceAndUpdateStats(
+			anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt(),
+			any(), anyInt(), nullable(String.class), anyString(), anyInt(), anyList(), any()))
+			.thenReturn("assistant-message");
+		TenantContext.setEntCode("ENT001");
+		TenantContext.setUserId("U001");
+
+		List<ChatStreamFrame> frames = harness.lifecycleService().recordStream(
+			Flux.just(response("<!--FINAL_ANSWER-->回答")), "测试问题", "c1", "knowledge",
+			"test-model-id", "test-model", "t1", context).collectList().block();
+
+		assertThat(frames).extracting(ChatStreamFrame::event).containsExactly("delta", "done");
+		assertThat(((ChatVO.StreamDone) frames.get(1).data()).knowledgeBaseId()).isEqualTo("kb-1");
 	}
 
 }

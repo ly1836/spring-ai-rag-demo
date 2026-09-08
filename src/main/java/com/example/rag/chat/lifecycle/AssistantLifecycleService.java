@@ -14,6 +14,9 @@ import com.example.rag.chat.dto.ChatAnswerResult;
 import com.example.rag.chat.dto.ChatStreamFrame;
 import com.example.rag.chat.dto.SavedAssistantMessage;
 import com.example.rag.chat.output.AssistantAnswerSanitizer;
+import com.example.rag.chat.rag.RagAnswerResult;
+import com.example.rag.chat.rag.RagAnswerService;
+import com.example.rag.chat.rag.RagRequestContext;
 import com.example.rag.config.TenantContext;
 import com.example.rag.config.TenantContextAccessor;
 import com.example.rag.conversation.ChatHistoryService;
@@ -27,6 +30,7 @@ import org.slf4j.LoggerFactory;
 
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Service;
 
 import reactor.core.publisher.Flux;
@@ -65,6 +69,9 @@ public class AssistantLifecycleService {
 	/** 图表类型和标题兜底选择服务。 */
 	private final ChartSelectionService chartSelectionService;
 
+	/** 受管 RAG 回答结果服务。 */
+	private final RagAnswerService ragAnswerService;
+
 	/**
 	 * 创建智能助手问答生命周期服务。
 	 *
@@ -76,6 +83,7 @@ public class AssistantLifecycleService {
 	 * @param chartSpecCodec     图表协议编解码器
 	 * @param answerSanitizer    助手最终答案净化器
 	 * @param chartSelectionService 图表类型和标题兜底选择服务
+	 * @param ragAnswerService   受管 RAG 回答结果服务
 	 */
 	public AssistantLifecycleService(ChatHistoryService chatHistoryService,
 			BillingService billingService,
@@ -84,7 +92,8 @@ public class AssistantLifecycleService {
 			ToolResultRecorder toolResultRecorder,
 			ChartSpecCodec chartSpecCodec,
 			AssistantAnswerSanitizer answerSanitizer,
-			ChartSelectionService chartSelectionService) {
+			ChartSelectionService chartSelectionService,
+			RagAnswerService ragAnswerService) {
 		this.chatHistoryService = chatHistoryService;
 		this.billingService = billingService;
 		this.toolCallRecorder = toolCallRecorder;
@@ -93,6 +102,7 @@ public class AssistantLifecycleService {
 		this.chartSpecCodec = chartSpecCodec;
 		this.answerSanitizer = answerSanitizer;
 		this.chartSelectionService = chartSelectionService;
+		this.ragAnswerService = ragAnswerService;
 	}
 
 	/**
@@ -160,11 +170,15 @@ public class AssistantLifecycleService {
 	 * @param response       模型响应
 	 * @param durationMs     响应耗时
 	 * @param traceId        问答链路 ID
+	 * @param ragContext     可空 RAG 请求上下文
 	 * @return 文本与可空图表
 	 */
 	public ChatAnswerResult finishNonStreaming(String question, String conversationId, String mode,
-			String modelId, String modelName, ChatResponse response, long durationMs, String traceId) {
+			String modelId, String modelName, ChatResponse response, long durationMs, String traceId,
+			RagRequestContext ragContext) {
 		String content = this.answerSanitizer.sanitize(this.extractContent(response));
+		RagAnswerResult ragResult = ragContext == null ? null
+			: this.ragAnswerService.complete(content, response, ragContext);
 		ChatResponse selectionResponse = this.chartSelectionService.ensureChart(
 			question, content, modelId, modelName, traceId, conversationId, mode);
 		int[] tokens = this.mergeTokenUsage(response, selectionResponse);
@@ -175,7 +189,7 @@ public class AssistantLifecycleService {
 		// 消息事务与计费事务保持独立，计费失败不回滚已保存消息。
 		SavedAssistantMessage savedAssistant = this.saveAssistantWithChartFallback(
 			conversationId, content, mode, modelName, tokens,
-			toolCalls, toolCallsCount, (int) durationMs, "success", null, chart, traceId);
+			toolCalls, toolCallsCount, (int) durationMs, "success", null, chart, traceId, ragResult);
 		try {
 			this.billingService.deductForTokenUsage(
 				tokens[2], tokens[0], tokens[1], modelName, conversationId);
@@ -183,7 +197,10 @@ public class AssistantLifecycleService {
 		catch (Exception ex) {
 			log.warn("计费扣除失败: {}", ex.getMessage());
 		}
-		return new ChatAnswerResult(content, savedAssistant.chart());
+		return ragResult == null
+			? new ChatAnswerResult(content, savedAssistant.chart())
+			: new ChatAnswerResult(content, savedAssistant.chart(), ragResult.knowledgeBaseId(),
+				ragResult.citations(), ragResult.documents().size());
 	}
 
 	/**
@@ -196,13 +213,16 @@ public class AssistantLifecycleService {
 	 * @param modelId        模型配置 ID
 	 * @param modelName      模型名称
 	 * @param traceId        问答链路 ID
+	 * @param ragContext     可空 RAG 请求上下文
 	 * @return 类型化事件流
 	 */
 	public Flux<ChatStreamFrame> recordStream(Flux<ChatResponse> responseFlux, String question,
-			String conversationId, String mode, String modelId, String modelName, String traceId) {
+			String conversationId, String mode, String modelId, String modelName, String traceId,
+			RagRequestContext ragContext) {
 		long startTime = System.currentTimeMillis();
 		AssistantAnswerSanitizer.StreamSession streamSession = this.answerSanitizer.openStream();
 		AtomicReference<Usage> usageRef = new AtomicReference<>();
+		AtomicReference<List<Document>> ragDocumentsRef = new AtomicReference<>(List.of());
 		AtomicBoolean finalized = new AtomicBoolean();
 
 		// 在 Servlet 线程捕获租户上下文，供 Reactor 链路与 Tool Calling 线程恢复。
@@ -215,6 +235,12 @@ public class AssistantLifecycleService {
 				Usage usage = response.getMetadata().getUsage();
 				if (usage != null && usage.getTotalTokens() != null && usage.getTotalTokens() > 0) {
 					usageRef.set(usage);
+				}
+				if (ragContext != null) {
+					List<Document> documents = this.ragAnswerService.extractEvidence(response);
+					if (!documents.isEmpty()) {
+						ragDocumentsRef.set(documents);
+					}
 				}
 			})
 			.mapNotNull(response -> {
@@ -230,15 +256,15 @@ public class AssistantLifecycleService {
 		return deltaFrames
 			.concatWith(Flux.defer(() -> Flux.fromIterable(this.finalizeStream(
 				finalized, SignalType.ON_COMPLETE, null, question, conversationId, mode, modelId, modelName,
-				traceId, entCode, userId, startTime, streamSession, usageRef))))
+				traceId, entCode, userId, startTime, streamSession, usageRef, ragContext, ragDocumentsRef))))
 			.onErrorResume(error -> Flux.fromIterable(this.finalizeStream(
 				finalized, SignalType.ON_ERROR, error, question, conversationId, mode, modelId, modelName,
-				traceId, entCode, userId, startTime, streamSession, usageRef)))
+				traceId, entCode, userId, startTime, streamSession, usageRef, ragContext, ragDocumentsRef)))
 			.doFinally(signal -> {
 				if (signal == SignalType.CANCEL) {
 					this.finalizeStream(finalized, SignalType.CANCEL, null,
 						question, conversationId, mode, modelId, modelName, traceId, entCode, userId,
-						startTime, streamSession, usageRef);
+						startTime, streamSession, usageRef, ragContext, ragDocumentsRef);
 				}
 			})
 			// 租户信息写入 Reactor Context 后可由现有上下文访问器恢复到异步线程。
@@ -322,12 +348,13 @@ public class AssistantLifecycleService {
 	 * @param errorMessage   错误信息
 	 * @param chart          可空图表
 	 * @param traceId        问答链路 ID
+	 * @param ragResult      可空 RAG 结果
 	 * @return 保存结果
 	 */
 	private SavedAssistantMessage saveAssistantWithChartFallback(
 			String conversationId, String content, String mode, String modelName, int[] tokens,
 			String toolCalls, int toolCallsCount, int durationMs, String status, String errorMessage,
-			ChartVO.ChartSpec chart, String traceId) {
+			ChartVO.ChartSpec chart, String traceId, RagAnswerResult ragResult) {
 		String chartJson = null;
 		ChartVO.ChartSpec persistedChart = chart;
 		if (chart != null) {
@@ -341,10 +368,15 @@ public class AssistantLifecycleService {
 			}
 		}
 		try {
-			String messageId = this.chatHistoryService.saveAssistantMessageAndUpdateStats(
-				conversationId, content, mode, modelName,
-				tokens[0], tokens[1], tokens[2], toolCalls, toolCallsCount,
-				chartJson, 0, durationMs, status, errorMessage);
+			String messageId = ragResult != null && "success".equals(status)
+				? this.chatHistoryService.saveAssistantMessageWithEvidenceAndUpdateStats(
+					conversationId, content, mode, modelName, tokens[0], tokens[1], tokens[2],
+					toolCalls, toolCallsCount, chartJson, ragResult.knowledgeBaseId(),
+					ragResult.documents().size(), ragResult.citations(), durationMs)
+				: this.chatHistoryService.saveAssistantMessageAndUpdateStats(
+					conversationId, content, mode, modelName,
+					tokens[0], tokens[1], tokens[2], toolCalls, toolCallsCount,
+					chartJson, 0, durationMs, status, errorMessage);
 			this.attachToolCallLogs(traceId, messageId);
 			return new SavedAssistantMessage(messageId, persistedChart);
 		}
@@ -356,10 +388,15 @@ public class AssistantLifecycleService {
 			log.warn("图表消息保存失败，已降级重试文本消息: traceId={}, conversationId={}, error={}",
 				traceId, conversationId, ex.getMessage());
 			try {
-				String messageId = this.chatHistoryService.saveAssistantMessageAndUpdateStats(
-					conversationId, content, mode, modelName,
-					tokens[0], tokens[1], tokens[2], toolCalls, toolCallsCount,
-					null, 0, durationMs, status, errorMessage);
+				String messageId = ragResult != null && "success".equals(status)
+					? this.chatHistoryService.saveAssistantMessageWithEvidenceAndUpdateStats(
+						conversationId, content, mode, modelName, tokens[0], tokens[1], tokens[2],
+						toolCalls, toolCallsCount, null, ragResult.knowledgeBaseId(),
+						ragResult.documents().size(), ragResult.citations(), durationMs)
+					: this.chatHistoryService.saveAssistantMessageAndUpdateStats(
+						conversationId, content, mode, modelName,
+						tokens[0], tokens[1], tokens[2], toolCalls, toolCallsCount,
+						null, 0, durationMs, status, errorMessage);
 				this.attachToolCallLogs(traceId, messageId);
 				return new SavedAssistantMessage(messageId, null);
 			}
@@ -402,6 +439,8 @@ public class AssistantLifecycleService {
 	 * @param startTime      开始时间
 	 * @param streamSession  流式最终答案净化会话
 	 * @param usageRef       Token 用量
+	 * @param ragContext     可空 RAG 请求上下文
+	 * @param ragDocumentsRef 已观测的同轮 RAG 证据
 	 * @return 需要继续发送的图表、完成或错误事件
 	 */
 	private List<ChatStreamFrame> finalizeStream(
@@ -410,7 +449,8 @@ public class AssistantLifecycleService {
 			String modelName, String traceId,
 			String entCode, String userId, long startTime,
 			AssistantAnswerSanitizer.StreamSession streamSession,
-			AtomicReference<Usage> usageRef) {
+			AtomicReference<Usage> usageRef, RagRequestContext ragContext,
+			AtomicReference<List<Document>> ragDocumentsRef) {
 		if (!finalized.compareAndSet(false, true)) {
 			return List.of();
 		}
@@ -420,6 +460,9 @@ public class AssistantLifecycleService {
 			AssistantAnswerSanitizer.StreamCompletion streamCompletion = streamSession.finish();
 			boolean cancelled = signal == SignalType.CANCEL;
 			boolean failed = signal == SignalType.ON_ERROR;
+			RagAnswerResult ragResult = failed || cancelled || ragContext == null ? null
+				: this.ragAnswerService.completeFromDocuments(
+					streamCompletion.content(), ragDocumentsRef.get(), ragContext);
 			ChatResponse selectionResponse = failed || cancelled ? null
 				: this.chartSelectionService.ensureChart(question, streamCompletion.content(),
 					modelId, modelName, traceId, conversationId, mode);
@@ -433,8 +476,9 @@ public class AssistantLifecycleService {
 				: this.resolveChart(traceId, entCode, conversationId);
 			SavedAssistantMessage savedAssistant = this.saveAssistantWithChartFallback(
 				conversationId, streamCompletion.content(), mode, modelName, tokens,
-				toolCalls, toolCallsCount, durationMs, status, errorMessage, chart, traceId);
-			if (!failed) {
+				toolCalls, toolCallsCount, durationMs, status, errorMessage, chart, traceId, ragResult);
+			// 成功、异常和取消都按已观测用量执行同一条最多一次的结算路径。
+			if (tokens[2] > 0) {
 				try {
 					this.billingService.deductForTokenUsage(
 						tokens[2], tokens[0], tokens[1], modelName, conversationId);
@@ -455,12 +499,17 @@ public class AssistantLifecycleService {
 				frames.add(new ChatStreamFrame(
 					"delta", new ChatVO.StreamDelta(streamCompletion.pendingDelta())));
 			}
+			if (ragResult != null && !ragResult.citations().isEmpty()) {
+				frames.add(new ChatStreamFrame("citations",
+					new ChatVO.StreamCitations(ragResult.knowledgeBaseId(), ragResult.citations())));
+			}
 			if (savedAssistant.chart() != null) {
 				frames.add(new ChatStreamFrame(
 					"chart", new ChatVO.StreamChart(savedAssistant.chart())));
 			}
 			frames.add(new ChatStreamFrame(
-				"done", new ChatVO.StreamDone(conversationId, "success")));
+				"done", new ChatVO.StreamDone(conversationId, "success",
+					ragResult == null ? null : ragResult.knowledgeBaseId())));
 			return List.copyOf(frames);
 		}
 		finally {

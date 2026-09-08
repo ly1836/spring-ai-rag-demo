@@ -10,11 +10,15 @@ import com.example.rag.chat.chart.selection.ChartSelectionService;
 import com.example.rag.chat.dto.ChatAnswerResult;
 import com.example.rag.chat.lifecycle.AssistantLifecycleService;
 import com.example.rag.chat.output.AssistantAnswerSanitizer;
+import com.example.rag.chat.rag.RagAnswerService;
+import com.example.rag.chat.rag.RagAnswerResult;
+import com.example.rag.chat.rag.RagRequestContext;
 import com.example.rag.config.TenantContext;
 import com.example.rag.conversation.ChatHistoryService;
 import com.example.rag.tool.trace.ToolCallLogService;
 import com.example.rag.tool.trace.ToolCallRecorder;
 import com.example.rag.vo.ChartVO;
+import com.example.rag.vo.ChatVO;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -23,10 +27,12 @@ import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.document.Document;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNotNull;
@@ -127,7 +133,7 @@ class ErpAssistantNonStreamingChartTest {
 
 		harness.lifecycleService().finishNonStreaming(
 			"测试问题", "c1", "data", "test-model-id", "test-model",
-			this.response("<!--FINAL_ANSWER-->模型回答", 1, 2, 3), 20L, "t1");
+			this.response("<!--FINAL_ANSWER-->模型回答", 1, 2, 3), 20L, "t1", null);
 
 		verify(harness.historyService(), times(1)).saveAssistantMessageAndUpdateStats(
 			eq("c1"), eq("模型回答"), eq("data"), eq("test-model"),
@@ -149,13 +155,14 @@ class ErpAssistantNonStreamingChartTest {
 		ChartSelectionService chartSelectionService = mock(ChartSelectionService.class);
 		ToolResultRecorder recorder = new ToolResultRecorder();
 		ChartSpecCodec codec = new ChartSpecCodec();
+		RagAnswerService ragAnswerService = mock(RagAnswerService.class);
 		AssistantLifecycleService lifecycleService = new AssistantLifecycleService(
 			historyService, billingService, new ToolCallRecorder(),
 			toolCallLogService, recorder, codec, new AssistantAnswerSanitizer(),
-			chartSelectionService);
+			chartSelectionService, ragAnswerService);
 		return new TestHarness(
 			lifecycleService, historyService, billingService, toolCallLogService,
-			chartSelectionService, recorder);
+			chartSelectionService, recorder, ragAnswerService);
 	}
 
 	/**
@@ -189,7 +196,7 @@ class ErpAssistantNonStreamingChartTest {
 			List.of(new Generation(new AssistantMessage(
 				"让我查询数据并规划图表。<!--FINAL_ANSWER-->模型回答"))));
 		return lifecycleService.finishNonStreaming(
-			"测试问题", "c1", "data", "test-model-id", "test-model", response, 20L, "t1");
+			"测试问题", "c1", "data", "test-model-id", "test-model", response, 20L, "t1", null);
 	}
 
 	/**
@@ -206,7 +213,7 @@ class ErpAssistantNonStreamingChartTest {
 			ChatHistoryService historyService,
 			BillingService billingService, ToolCallLogService toolCallLogService,
 			ChartSelectionService chartSelectionService,
-			ToolResultRecorder recorder) {
+			ToolResultRecorder recorder, RagAnswerService ragAnswerService) {
 	}
 
 	/**
@@ -224,6 +231,40 @@ class ErpAssistantNonStreamingChartTest {
 			.usage(new DefaultUsage(promptTokens, completionTokens, totalTokens))
 			.build();
 		return ChatResponse.builder().from(response).metadata(metadata).build();
+	}
+
+	/**
+	 * 验证 knowledge 非流式回答保存并返回同轮真实证据和引用，且只扣费一次。
+	 */
+	@Test
+	public void shouldPersistAndReturnNonStreamingRagEvidence() {
+		TestHarness harness = buildHarness();
+		RagRequestContext context = new RagRequestContext("kb-1", null, null);
+		Document document = new Document("证据");
+		List<ChatVO.CitationResponse> citations = List.of(new ChatVO.CitationResponse(
+			1, "kb-1", "doc-1", 2, "chunk-1", 0, "manual.pdf", "证据", 0.9));
+		when(harness.ragAnswerService().complete(anyString(), any(ChatResponse.class), eq(context)))
+			.thenReturn(new RagAnswerResult("回答 [1]", "kb-1", List.of(document), citations));
+		when(harness.historyService().saveAssistantMessageWithEvidenceAndUpdateStats(
+			anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt(),
+			any(), anyInt(), nullable(String.class), anyString(), anyInt(), anyList(), any()))
+			.thenReturn("assistant-message");
+		TenantContext.setEntCode("ENT001");
+		TenantContext.setUserId("U001");
+
+		ChatAnswerResult result = harness.lifecycleService().finishNonStreaming(
+			"测试问题", "c1", "knowledge", "test-model-id", "test-model",
+			this.response("回答 [1]", 1, 2, 3), 20L, "t1", context);
+
+		assertThat(result.knowledgeBaseId()).isEqualTo("kb-1");
+		assertThat(result.ragDocCount()).isEqualTo(1);
+		assertThat(result.citations()).isEqualTo(citations);
+		verify(harness.historyService()).saveAssistantMessageWithEvidenceAndUpdateStats(
+			eq("c1"), eq("回答 [1]"), eq("knowledge"), eq("test-model"),
+			eq(1), eq(2), eq(3), nullable(String.class), eq(0), isNull(),
+			eq("kb-1"), eq(1), eq(citations), eq(20));
+		verify(harness.billingService(), times(1)).deductForTokenUsage(
+			eq(3), eq(1), eq(2), eq("test-model"), eq("c1"));
 	}
 
 }
