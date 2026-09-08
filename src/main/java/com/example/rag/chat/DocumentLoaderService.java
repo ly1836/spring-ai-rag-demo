@@ -2,11 +2,17 @@ package com.example.rag.chat;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import ai.djl.huggingface.tokenizers.HuggingFaceTokenizer;
 import jakarta.annotation.PreDestroy;
@@ -14,7 +20,10 @@ import org.apache.tika.sax.BodyContentHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.example.rag.chat.rag.EmbeddingModelMetadata;
 import com.example.rag.config.TenantContext;
+import com.example.rag.knowledge.dto.ManagedDocumentLoadResult;
+import com.example.rag.knowledge.dto.ManagedDocumentMetadata;
 
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.ExtractedTextFormatter;
@@ -52,7 +61,7 @@ public class DocumentLoaderService implements AutoCloseable {
 	private static final int VECTOR_WRITE_BATCH_SIZE = 100;
 
 	/** 当前 ONNX 嵌入模型允许的最大 token 数。 */
-	private static final int EMBEDDING_MAX_TOKENS = 128;
+	private static final int EMBEDDING_MAX_TOKENS = EmbeddingModelMetadata.MAX_TOKENS;
 
 	/** 实际嵌入模型使用的分词器资源。 */
 	private static final String EMBEDDING_TOKENIZER_RESOURCE = "models/embedding/tokenizer.json";
@@ -131,23 +140,7 @@ public class DocumentLoaderService implements AutoCloseable {
 	 */
 	private int loadResource(Resource resource, String filename) {
 		log.info("开始加载文档: {}", filename);
-
-		List<Document> docs;
-		try {
-			// Tika 在解析阶段直接限制输出字符数，避免大文档先占满堆内存。
-			docs = new TikaDocumentReader(resource,
-				new BodyContentHandler(MAX_EXTRACTED_TEXT_CHARS),
-				ExtractedTextFormatter.defaults()).read();
-		}
-		catch (RuntimeException ex) {
-			if (isTextLimitExceeded(ex)) {
-				throw new IllegalArgumentException(
-					"文档解析文本超过 " + MAX_EXTRACTED_TEXT_CHARS + " 个字符", ex);
-			}
-			throw ex;
-		}
-
-		List<Document> chunks = splitAndValidate(docs);
+		List<Document> chunks = readAndSplitResource(resource);
 		addMetadataAndStore(chunks, filename);
 		log.info("已从文档 {} 导入 {} 个分片", filename, chunks.size());
 		return chunks.size();
@@ -167,6 +160,8 @@ public class DocumentLoaderService implements AutoCloseable {
 		for (Document chunk : chunks) {
 			chunk.getMetadata().put("ent_code", entCode);
 			chunk.getMetadata().put("source", source);
+			chunk.getMetadata().put(EmbeddingModelMetadata.METADATA_KEY,
+				EmbeddingModelMetadata.CURRENT_MODEL_ID);
 		}
 		Filter.Expression sourceFilter = buildSourceFilter(entCode, source);
 		// 同租户同来源重新导入前先清理旧分片，避免重复向量干扰召回。
@@ -199,6 +194,12 @@ public class DocumentLoaderService implements AutoCloseable {
 	private List<Document> splitAndValidate(List<Document> documents) {
 		validateExtractedTextSize(documents);
 		List<Document> initialChunks = this.splitter.transform(documents);
+		if (initialChunks.isEmpty()) {
+			// 完整短文档不足分片器的最小长度时仍应入库，后续继续校验真实 token 上限。
+			initialChunks = documents.stream()
+				.filter(document -> document.getText() != null && !document.getText().isBlank())
+				.toList();
+		}
 		if (initialChunks.size() > MAX_DOCUMENT_CHUNKS) {
 			throw new IllegalArgumentException("文档分片数超过 " + MAX_DOCUMENT_CHUNKS + " 个");
 		}
@@ -336,6 +337,170 @@ public class DocumentLoaderService implements AutoCloseable {
 	@PreDestroy
 	public void close() {
 		this.embeddingTokenizer.close();
+	}
+
+	/**
+	 * 加载受管文件并写入带稳定证据身份的向量分片。
+	 *
+	 * @param inputStream 文件输入流
+	 * @param metadata    受管文档身份
+	 * @return 分片数量和文件摘要
+	 * @throws IllegalArgumentException 文档内容或身份非法时抛出 PARAM_ERROR
+	 */
+	public ManagedDocumentLoadResult loadManagedFile(InputStream inputStream,
+			ManagedDocumentMetadata metadata) {
+		validateManagedMetadata(metadata);
+		MessageDigest digest = createSha256Digest();
+		DigestInputStream digestInputStream = new DigestInputStream(inputStream, digest);
+		List<Document> chunks = readAndSplitResource(new InputStreamResource(digestInputStream));
+		addManagedMetadataAndStore(chunks, metadata);
+		return new ManagedDocumentLoadResult(chunks.size(), HexFormat.of().formatHex(digest.digest()));
+	}
+
+	/**
+	 * 加载受管纯文本，供固定评测夹具复用生产切分和向量写入链路。
+	 *
+	 * @param text     文本内容
+	 * @param metadata 受管文档身份
+	 * @return 分片数量和文本摘要
+	 * @throws IllegalArgumentException 文本或身份非法时抛出 PARAM_ERROR
+	 */
+	public ManagedDocumentLoadResult loadManagedText(String text, ManagedDocumentMetadata metadata) {
+		validateManagedMetadata(metadata);
+		if (text == null || text.isBlank()) {
+			throw new IllegalArgumentException("文档未提取到可入库文本");
+		}
+		List<Document> chunks = splitAndValidate(List.of(new Document(text)));
+		addManagedMetadataAndStore(chunks, metadata);
+		MessageDigest digest = createSha256Digest();
+		return new ManagedDocumentLoadResult(chunks.size(),
+			HexFormat.of().formatHex(digest.digest(text.getBytes(StandardCharsets.UTF_8))));
+	}
+
+	/**
+	 * 按完整租户、知识库、文档和版本边界删除受管向量。
+	 *
+	 * @param metadata 受管文档身份
+	 */
+	public void deleteManagedVersion(ManagedDocumentMetadata metadata) {
+		validateManagedMetadata(metadata);
+		this.vectorStore.delete(buildManagedVersionFilter(metadata));
+	}
+
+	/**
+	 * 使用受限 Tika 读取资源并完成两阶段分片校验。
+	 *
+	 * @param resource 文档资源
+	 * @return 合格最终分片
+	 * @throws IllegalArgumentException 文本或分片超出资源边界时抛出 PARAM_ERROR
+	 */
+	private List<Document> readAndSplitResource(Resource resource) {
+		List<Document> documents;
+		try {
+			// Tika 在解析阶段直接限制输出字符数，避免大文档先占满堆内存。
+			documents = new TikaDocumentReader(resource,
+				new BodyContentHandler(MAX_EXTRACTED_TEXT_CHARS),
+				ExtractedTextFormatter.defaults()).read();
+		}
+		catch (RuntimeException ex) {
+			if (isTextLimitExceeded(ex)) {
+				throw new IllegalArgumentException(
+					"文档解析文本超过 " + MAX_EXTRACTED_TEXT_CHARS + " 个字符", ex);
+			}
+			throw ex;
+		}
+		return splitAndValidate(documents);
+	}
+
+	/**
+	 * 为分片写入稳定证据元数据并按批入库。
+	 *
+	 * @param chunks   合格分片
+	 * @param metadata 受管文档身份
+	 * @throws IllegalArgumentException 文档没有可入库文本时抛出 PARAM_ERROR
+	 */
+	private void addManagedMetadataAndStore(List<Document> chunks, ManagedDocumentMetadata metadata) {
+		if (chunks.isEmpty()) {
+			throw new IllegalArgumentException("文档未提取到可入库文本");
+		}
+		for (int index = 0; index < chunks.size(); index++) {
+			Document chunk = chunks.get(index);
+			chunk.getMetadata().put("ent_code", metadata.entCode());
+			chunk.getMetadata().put("knowledge_base_id", metadata.knowledgeBaseId());
+			chunk.getMetadata().put("document_id", metadata.documentId());
+			chunk.getMetadata().put("document_version", metadata.documentVersion());
+			chunk.getMetadata().put("chunk_id", UUID.randomUUID().toString());
+			chunk.getMetadata().put("chunk_index", index);
+			chunk.getMetadata().put("source", metadata.sourceName());
+			chunk.getMetadata().put(EmbeddingModelMetadata.METADATA_KEY,
+				EmbeddingModelMetadata.CURRENT_MODEL_ID);
+		}
+		try {
+			for (int start = 0; start < chunks.size(); start += VECTOR_WRITE_BATCH_SIZE) {
+				int end = Math.min(start + VECTOR_WRITE_BATCH_SIZE, chunks.size());
+				this.vectorStore.add(List.copyOf(chunks.subList(start, end)));
+			}
+		}
+		catch (RuntimeException ex) {
+			try {
+				deleteManagedVersion(metadata);
+			}
+			catch (RuntimeException cleanupEx) {
+				log.warn("受管文档导入失败后清理残留分片失败: documentId={}, version={}, error={}",
+					metadata.documentId(), metadata.documentVersion(), cleanupEx.getMessage());
+			}
+			throw ex;
+		}
+	}
+
+	/**
+	 * 构建受管文档版本的精确向量过滤条件。
+	 *
+	 * @param metadata 受管文档身份
+	 * @return 向量过滤表达式
+	 */
+	private Filter.Expression buildManagedVersionFilter(ManagedDocumentMetadata metadata) {
+		FilterExpressionBuilder builder = new FilterExpressionBuilder();
+		return builder.and(
+			builder.eq("ent_code", metadata.entCode()),
+			builder.and(
+				builder.eq("knowledge_base_id", metadata.knowledgeBaseId()),
+				builder.and(
+					builder.eq("document_id", metadata.documentId()),
+					builder.eq("document_version", metadata.documentVersion())))).build();
+	}
+
+	/**
+	 * 校验受管文档身份完整且属于当前租户。
+	 *
+	 * @param metadata 受管文档身份
+	 * @throws IllegalArgumentException 身份字段缺失时抛出 PARAM_ERROR
+	 * @throws IllegalStateException 租户不一致时抛出 BIZ_ERROR
+	 */
+	private void validateManagedMetadata(ManagedDocumentMetadata metadata) {
+		if (metadata == null || metadata.knowledgeBaseId() == null || metadata.knowledgeBaseId().isBlank()
+				|| metadata.documentId() == null || metadata.documentId().isBlank()
+				|| metadata.sourceName() == null || metadata.sourceName().isBlank()
+				|| metadata.documentVersion() <= 0) {
+			throw new IllegalArgumentException("受管文档身份不完整");
+		}
+		if (!TenantContext.requireEntCode().equals(metadata.entCode())) {
+			throw new IllegalStateException("受管文档租户边界不一致");
+		}
+	}
+
+	/**
+	 * 创建 SHA-256 摘要计算器。
+	 *
+	 * @return SHA-256 摘要计算器
+	 */
+	private static MessageDigest createSha256Digest() {
+		try {
+			return MessageDigest.getInstance("SHA-256");
+		}
+		catch (NoSuchAlgorithmException ex) {
+			throw new IllegalStateException("当前运行环境不支持 SHA-256", ex);
+		}
 	}
 
 }

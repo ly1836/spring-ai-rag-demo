@@ -24,7 +24,7 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
 		SELECT message_id AS messageId, role, content, mode, model,
 		prompt_tokens AS promptTokens, completion_tokens AS completionTokens, total_tokens AS totalTokens,
 		tool_calls AS toolCalls, tool_calls_count AS toolCallsCount, chart_spec AS chartSpec,
-		rag_doc_count AS ragDocCount,
+		knowledge_base_id AS knowledgeBaseId, rag_doc_count AS ragDocCount, rag_citations AS ragCitations,
 		duration_ms AS durationMs, status, error_message AS errorMessage,
 		DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS createdAt
 		FROM a_chat_message

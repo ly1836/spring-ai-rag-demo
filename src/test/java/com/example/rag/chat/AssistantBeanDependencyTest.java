@@ -21,7 +21,19 @@ import com.example.rag.chat.client.AssistantClientProvider;
 import com.example.rag.chat.guard.BusinessDataTurnGuard;
 import com.example.rag.chat.lifecycle.AssistantLifecycleService;
 import com.example.rag.chat.output.AssistantAnswerSanitizer;
+import com.example.rag.chat.rag.RagAdvisorFactory;
+import com.example.rag.chat.rag.RagAnswerService;
+import com.example.rag.chat.rag.RagCitationCodec;
+import com.example.rag.chat.rag.RagCitationValidator;
+import com.example.rag.chat.rag.RagContextFormatter;
+import com.example.rag.chat.rag.RagDocumentEligibilityFilter;
+import com.example.rag.chat.rag.RagEvidenceExtractor;
 import com.example.rag.conversation.ChatHistoryService;
+import com.example.rag.controller.ChatController;
+import com.example.rag.controller.KnowledgeBaseController;
+import com.example.rag.knowledge.KnowledgeBaseService;
+import com.example.rag.knowledge.KnowledgeDocumentIngestionService;
+import com.example.rag.knowledge.KnowledgeDocumentService;
 import com.example.rag.tool.registry.ToolRegistryService;
 import com.example.rag.tool.trace.ToolCallLogService;
 import com.example.rag.tool.trace.ToolCallRecorder;
@@ -54,7 +66,20 @@ class AssistantBeanDependencyTest {
 		ChartPlanFactory.class,
 		ChartPlanValidator.class,
 		ChartSpecCodec.class,
-		AssistantAnswerSanitizer.class);
+		AssistantAnswerSanitizer.class,
+		DocumentLoaderService.class,
+		RagAnswerService.class,
+		RagAdvisorFactory.class,
+		RagDocumentEligibilityFilter.class,
+		RagContextFormatter.class,
+		RagEvidenceExtractor.class,
+		RagCitationValidator.class,
+		RagCitationCodec.class,
+		KnowledgeBaseService.class,
+		KnowledgeDocumentService.class,
+		KnowledgeDocumentIngestionService.class,
+		ChatController.class,
+		KnowledgeBaseController.class);
 
 	/**
 	 * 验证本次拆分后的构造器注入图不存在循环依赖。

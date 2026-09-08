@@ -5,6 +5,7 @@ import java.util.Map;
 
 import com.example.rag.chat.chart.protocol.ChartSpecCodec;
 import com.example.rag.chat.output.AssistantAnswerSanitizer;
+import com.example.rag.chat.rag.RagCitationCodec;
 import com.example.rag.config.TenantContext;
 import com.example.rag.dao.entity.ChatConversationEntity;
 import com.example.rag.dao.entity.ChatMessageEntity;
@@ -12,6 +13,8 @@ import com.example.rag.dao.mapper.ChatConversationMapper;
 import com.example.rag.dao.mapper.ChatMessageMapper;
 import com.example.rag.vo.ConversationVO;
 import com.example.rag.vo.ChartVO;
+import com.example.rag.vo.ChatVO;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,7 +46,8 @@ class ChatHistoryServiceTest {
 		messageMapper = mock(ChatMessageMapper.class);
 		chartSpecCodec = new ChartSpecCodec();
 		service = new ChatHistoryService(
-			conversationMapper, messageMapper, chartSpecCodec, new AssistantAnswerSanitizer());
+			conversationMapper, messageMapper, chartSpecCodec, new AssistantAnswerSanitizer(),
+			new RagCitationCodec(new ObjectMapper()));
 		TenantContext.setEntCode("ENT001");
 		TenantContext.setUserId("U002");
 		// 默认测试会话属于当前用户，需要异常状态的用例再单独覆盖。
@@ -132,7 +136,7 @@ class ChatHistoryServiceTest {
 			new ChartVO.ChartSource(List.of("query_sales")));
 		when(messageMapper.selectMessageItems("c1")).thenReturn(List.of(
 			new ConversationVO.ChatMessageRecord("m1", "assistant", "回答", "data", "model",
-				0, 0, 0, null, 0, chartSpecCodec.encode(chart), 0,
+				0, 0, 0, null, 0, chartSpecCodec.encode(chart), null, 0, null,
 				10, "success", null, "2026-07-31 10:00:00")));
 
 		List<ConversationVO.ChatMessageItemResponse> messages = service.getMessages("c1");
@@ -148,7 +152,7 @@ class ChatHistoryServiceTest {
 	public void shouldKeepLegacyMessageChartNull() {
 		when(messageMapper.selectMessageItems("c1")).thenReturn(List.of(
 			new ConversationVO.ChatMessageRecord("m1", "assistant", "回答", "data", "model",
-				0, 0, 0, null, 0, null, 0,
+				0, 0, 0, null, 0, null, null, 0, null,
 				10, "success", null, "2026-07-31 10:00:00")));
 
 		List<ConversationVO.ChatMessageItemResponse> messages = service.getMessages("c1");
@@ -164,7 +168,7 @@ class ChatHistoryServiceTest {
 	public void shouldIgnoreInvalidPersistedChart() {
 		when(messageMapper.selectMessageItems("c1")).thenReturn(List.of(
 			new ConversationVO.ChatMessageRecord("m1", "assistant", "回答", "data", "model",
-				0, 0, 0, null, 0, "{invalid", 0,
+				0, 0, 0, null, 0, "{invalid", null, 0, null,
 				10, "success", null, "2026-07-31 10:00:00")));
 
 		List<ConversationVO.ChatMessageItemResponse> messages = service.getMessages("c1");
@@ -208,10 +212,10 @@ class ChatHistoryServiceTest {
 	public void shouldKeepCancelledAndErrorMessageChartsNull() {
 		when(messageMapper.selectMessageItems("c1")).thenReturn(List.of(
 			new ConversationVO.ChatMessageRecord("m1", "assistant", "部分回答", "data", "model",
-				0, 0, 0, null, 0, null, 0,
+				0, 0, 0, null, 0, null, null, 0, null,
 				10, "cancelled", null, "2026-07-31 10:00:00"),
 			new ConversationVO.ChatMessageRecord("m2", "assistant", null, "data", "model",
-				0, 0, 0, null, 0, null, 0,
+				0, 0, 0, null, 0, null, null, 0, null,
 				10, "error", "模型异常", "2026-07-31 10:01:00")));
 
 		List<ConversationVO.ChatMessageItemResponse> messages = service.getMessages("c1");
@@ -241,16 +245,77 @@ class ChatHistoryServiceTest {
 		when(messageMapper.selectMessageItems("c1")).thenReturn(List.of(
 			new ConversationVO.ChatMessageRecord(
 				"m1", "assistant", "让我规划图表。\n\n---\n\n最终业务回答",
-				"data", "model", 0, 0, 0, null, 0, null, 0,
+				"data", "model", 0, 0, 0, null, 0, null, null, 0, null,
 				10, "success", null, "2026-07-31 10:00:00"),
 			new ConversationVO.ChatMessageRecord(
 				"m2", "user", "让我查询订单",
-				"data", null, 0, 0, 0, null, 0, null, 0,
+				"data", null, 0, 0, 0, null, 0, null, null, 0, null,
 				null, "success", null, "2026-07-31 10:01:00")));
 
 		List<ConversationVO.ChatMessageItemResponse> messages = service.getMessages("c1");
 
 		assertThat(messages).extracting(ConversationVO.ChatMessageItemResponse::content)
 			.containsExactly("最终业务回答", "让我查询订单");
+	}
+
+	/**
+	 * 验证成功助手消息把知识库、真实召回数和引用原子写入同一实体。
+	 */
+	@Test
+	public void shouldPersistKnowledgeBaseAndCitationSnapshotOnAssistantMessage() {
+		List<ChatVO.CitationResponse> citations = List.of(new ChatVO.CitationResponse(
+			1, "kb-1", "doc-1", 2, "chunk-1", 0, "manual.pdf", "证据", 0.9));
+		ArgumentCaptor<ChatMessageEntity> entityCaptor = ArgumentCaptor.forClass(ChatMessageEntity.class);
+
+		service.saveAssistantMessageWithEvidenceAndUpdateStats(
+			"c1", "回答 [1]", "knowledge", "model", 1, 2, 3,
+			null, 0, null, "kb-1", 1, citations, 10);
+
+		verify(messageMapper).insert(entityCaptor.capture());
+		assertThat(entityCaptor.getValue().getKnowledgeBaseId()).isEqualTo("kb-1");
+		assertThat(entityCaptor.getValue().getRagDocCount()).isEqualTo(1);
+		assertThat(entityCaptor.getValue().getRagCitations()).contains("\"documentId\":\"doc-1\"");
+		assertThat(entityCaptor.getValue().getStatus()).isEqualTo("success");
+	}
+
+	/**
+	 * 验证历史详情直接回放保存时的引用快照。
+	 */
+	@Test
+	public void shouldRestorePersistedCitationSnapshotFromHistory() {
+		List<ChatVO.CitationResponse> citations = List.of(new ChatVO.CitationResponse(
+			1, "kb-1", "doc-1", 2, "chunk-1", 0, "manual.pdf", "旧版本证据", 0.9));
+		String json = new RagCitationCodec(new ObjectMapper()).encode(citations);
+		when(messageMapper.selectMessageItems("c1")).thenReturn(List.of(
+			new ConversationVO.ChatMessageRecord("m1", "assistant", "回答 [1]", "knowledge", "model",
+				1, 2, 3, null, 0, null, "kb-1", 1, json,
+				10, "success", null, "2026-07-31 10:00:00")));
+
+		List<ConversationVO.ChatMessageItemResponse> messages = service.getMessages("c1");
+
+		assertThat(messages).singleElement().satisfies(message -> {
+			assertThat(message.knowledgeBaseId()).isEqualTo("kb-1");
+			assertThat(message.ragDocCount()).isEqualTo(1);
+			assertThat(message.citations()).isEqualTo(citations);
+		});
+	}
+
+	/**
+	 * 验证损坏或超限引用 JSON 不影响同一会话其他消息返回。
+	 */
+	@Test
+	public void shouldDegradeInvalidAndOversizedCitationJsonToEmptyList() {
+		when(messageMapper.selectMessageItems("c1")).thenReturn(List.of(
+			new ConversationVO.ChatMessageRecord("m1", "assistant", "回答一", "knowledge", "model",
+				0, 0, 0, null, 0, null, "kb-1", 1, "{invalid",
+				10, "success", null, "2026-07-31 10:00:00"),
+			new ConversationVO.ChatMessageRecord("m2", "assistant", "回答二", "knowledge", "model",
+				0, 0, 0, null, 0, null, "kb-1", 1, "中".repeat(12000),
+				10, "success", null, "2026-07-31 10:01:00")));
+
+		List<ConversationVO.ChatMessageItemResponse> messages = service.getMessages("c1");
+
+		assertThat(messages).hasSize(2);
+		assertThat(messages).allMatch(message -> message.citations().isEmpty());
 	}
 }

@@ -4,8 +4,12 @@ import com.example.rag.chat.client.AssistantClientProvider;
 import com.example.rag.chat.dto.ChatAnswerResult;
 import com.example.rag.chat.dto.ChatStreamFrame;
 import com.example.rag.chat.dto.DocSnippet;
+import com.example.rag.chat.dto.RagSearchResult;
 import com.example.rag.chat.guard.BusinessDataTurnGuard;
 import com.example.rag.chat.lifecycle.AssistantLifecycleService;
+import com.example.rag.chat.rag.RagAnswerService;
+import com.example.rag.chat.rag.RagRequestContext;
+import com.example.rag.chat.rag.RagRetrievalDefaults;
 import com.example.rag.config.TenantContext;
 import com.example.rag.tool.registry.ToolRegistryService;
 import com.example.rag.tool.registry.ToolSnapshot;
@@ -15,16 +19,11 @@ import org.slf4j.LoggerFactory;
 
 import org.springframework.ai.chat.client.ChatClientAttributes;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.ai.vectorstore.filter.Filter;
-import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.stereotype.Service;
 
 import reactor.core.publisher.Flux;
@@ -44,23 +43,11 @@ public class ErpAssistantService {
 
     private static final Logger log = LoggerFactory.getLogger(ErpAssistantService.class);
 
-    /** RAG 向量检索的默认相似度阈值。 */
-    private static final double DEFAULT_SIMILARITY_THRESHOLD = 0.5;
-
-    /** 知识问答召回数量，覆盖同一主题分布在多个相邻片段的情况。 */
-    private static final int KNOWLEDGE_TOP_K = 8;
-
-    /** 知识问答相似度阈值，兼容当前中文技术文档的实际召回分数。 */
-    private static final double KNOWLEDGE_SIMILARITY_THRESHOLD = 0.25;
-
     /** 智能助手 ChatClient 提供器。 */
     private final AssistantClientProvider clientProvider;
 
     /** 问答生命周期服务。 */
     private final AssistantLifecycleService lifecycleService;
-
-    /** PgVector 向量数据库。 */
-    private final VectorStore vectorStore;
 
     /** Tool 注册服务，用于生成与当前快照一致的示例问题。 */
     private final ToolRegistryService toolRegistryService;
@@ -70,6 +57,9 @@ public class ErpAssistantService {
 
     /** 当前轮业务数据守卫。 */
     private final BusinessDataTurnGuard businessDataTurnGuard;
+
+    /** 受管知识库 RAG 回答服务。 */
+    private final RagAnswerService ragAnswerService;
 
     /** AI 生成的预置示例问题缓存。 */
     private volatile List<String> cachedHints;
@@ -82,22 +72,22 @@ public class ErpAssistantService {
      *
      * @param clientProvider       ChatClient 提供器
      * @param lifecycleService     问答生命周期服务
-     * @param vectorStore          向量数据库
      * @param chatMemoryRepository 会话记忆仓库
      * @param toolRegistryService  Tool 注册服务
      * @param businessDataTurnGuard 当前轮业务数据守卫
+     * @param ragAnswerService     受管知识库 RAG 回答服务
      */
     public ErpAssistantService(AssistantClientProvider clientProvider,
             AssistantLifecycleService lifecycleService,
-            VectorStore vectorStore,
             ChatMemoryRepository chatMemoryRepository,
             ToolRegistryService toolRegistryService,
-            BusinessDataTurnGuard businessDataTurnGuard) {
+            BusinessDataTurnGuard businessDataTurnGuard,
+            RagAnswerService ragAnswerService) {
         this.clientProvider = clientProvider;
         this.lifecycleService = lifecycleService;
-        this.vectorStore = vectorStore;
         this.toolRegistryService = toolRegistryService;
         this.businessDataTurnGuard = businessDataTurnGuard;
+        this.ragAnswerService = ragAnswerService;
         // 会话窗口大小与原实现保持一致，具体查询上限仍由 JDBC 仓库控制。
         this.chatMemory = MessageWindowChatMemory.builder()
             .chatMemoryRepository(chatMemoryRepository)
@@ -112,12 +102,17 @@ public class ErpAssistantService {
      * @param conversationId              会话 ID
      * @param modelId                     模型 ID
      * @param requireExistingConversation 是否要求会话已存在
+     * @param knowledgeBaseId              可空知识库 ID
      * @return 文本与可空图表
      */
     public ChatAnswerResult ask(String question, String conversationId, String modelId,
-            boolean requireExistingConversation) {
+            boolean requireExistingConversation, String knowledgeBaseId) {
         String mode = "auto";
         String modelName = this.clientProvider.resolveModelName(modelId);
+        // 自动模式也必须先固定受管知识库，避免旧向量或其他知识库进入本轮回答。
+        RagRequestContext ragContext = this.ragAnswerService.prepare(
+            knowledgeBaseId, question, RagRetrievalDefaults.AUTO_TOP_K,
+            RagRetrievalDefaults.AUTO_SIMILARITY_THRESHOLD);
         // 统一在模型调用前校验会话、保存用户消息并检查计费配额。
         this.lifecycleService.prepareConversation(
             conversationId, question, mode, requireExistingConversation);
@@ -129,7 +124,7 @@ public class ErpAssistantService {
             // 自动模式保留会话记忆和租户隔离的 RAG 检索能力。
             // 带 Tool 的客户端同时提供业务查询能力和内部图表类型选择能力。
             // ToolContext 为后续 Tool 结果捕获提供 traceId、租户、会话和模型边界。
-            // 两个 Advisor 分别补充最近会话消息和当前租户的知识库检索片段。
+            // 两个 Advisor 分别补充最近会话消息和当前受管知识库的检索片段。
             // currentTurnQuestion 只增强发送给模型的约束，数据库仍保存用户原始问题。
             ChatResponse response = this.clientProvider.resolveClient(modelId).prompt()
                 .options(ChatOptions.builder().model(modelName))
@@ -138,9 +133,7 @@ public class ErpAssistantService {
                 .advisors(advisor -> advisor
                     .param(ChatMemory.CONVERSATION_ID, conversationId)
                     .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build(),
-                        QuestionAnswerAdvisor.builder(this.vectorStore)
-                            .searchRequest(this.buildTenantSearchRequest(question))
-                            .build()))
+                        ragContext.advisor()))
                 .user(this.businessDataTurnGuard.currentTurnQuestion(question))
                 .call()
                 .chatResponse();
@@ -155,9 +148,7 @@ public class ErpAssistantService {
                     .advisors(advisor -> advisor
                         .param(ChatMemory.CONVERSATION_ID, conversationId)
                         .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build(),
-                            QuestionAnswerAdvisor.builder(this.vectorStore)
-                                .searchRequest(this.buildTenantSearchRequest(question))
-                                .build()))
+                            ragContext.advisor()))
                     .user(this.businessDataTurnGuard.retryQuestion(question))
                     .call()
                     .chatResponse(),
@@ -166,7 +157,7 @@ public class ErpAssistantService {
             // 统一净化最终回答，并完成图表选择、消息持久化和单次计费。
             return this.lifecycleService.finishNonStreaming(
                 question, conversationId, mode, modelId, modelName, response,
-                System.currentTimeMillis() - startTime, traceId);
+                System.currentTimeMillis() - startTime, traceId, ragContext);
         }
         finally {
             // 非流式调用无论成功或异常都立即释放本轮短生命周期数据。
@@ -181,12 +172,17 @@ public class ErpAssistantService {
      * @param conversationId              会话 ID
      * @param modelId                     模型 ID
      * @param requireExistingConversation 是否要求会话已存在
+     * @param knowledgeBaseId              可空知识库 ID
      * @return 类型化事件流
      */
     public Flux<ChatStreamFrame> askStream(String question, String conversationId, String modelId,
-            boolean requireExistingConversation) {
+            boolean requireExistingConversation, String knowledgeBaseId) {
         String mode = "auto";
         String modelName = this.clientProvider.resolveModelName(modelId);
+        // 流式自动模式与非流式模式使用同一受管知识库边界。
+        RagRequestContext ragContext = this.ragAnswerService.prepare(
+            knowledgeBaseId, question, RagRetrievalDefaults.AUTO_TOP_K,
+            RagRetrievalDefaults.AUTO_SIMILARITY_THRESHOLD);
         // 流式调用同样先固定会话状态和配额边界，再创建本轮独立链路。
         this.lifecycleService.prepareConversation(
             conversationId, question, mode, requireExistingConversation);
@@ -202,9 +198,7 @@ public class ErpAssistantService {
                 .advisors(advisor -> advisor
                     .param(ChatMemory.CONVERSATION_ID, conversationId)
                     .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build(),
-                        QuestionAnswerAdvisor.builder(this.vectorStore)
-                            .searchRequest(this.buildTenantSearchRequest(question))
-                            .build()))
+                        ragContext.advisor()))
                 .user(this.businessDataTurnGuard.currentTurnQuestion(question))
                 .stream()
                 .chatResponse(),
@@ -216,16 +210,14 @@ public class ErpAssistantService {
                 .advisors(advisor -> advisor
                     .param(ChatMemory.CONVERSATION_ID, conversationId)
                     .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build(),
-                        QuestionAnswerAdvisor.builder(this.vectorStore)
-                            .searchRequest(this.buildTenantSearchRequest(question))
-                            .build()))
+                        ragContext.advisor()))
                 .user(this.businessDataTurnGuard.retryQuestion(question))
                 .stream()
                 .chatResponse(),
             mode, question, traceId, TenantContext.requireEntCode(), conversationId);
         // 生命周期服务负责转换类型化事件，并统一处理成功、异常和取消收口。
         return this.lifecycleService.recordStream(
-            responseFlux, question, conversationId, mode, modelId, modelName, traceId);
+            responseFlux, question, conversationId, mode, modelId, modelName, traceId, ragContext);
     }
 
     /**
@@ -280,7 +272,7 @@ public class ErpAssistantService {
             // 图表与文本在同一次生命周期收口中保存和计费。
             return this.lifecycleService.finishNonStreaming(
                 question, conversationId, mode, modelId, modelName, response,
-                System.currentTimeMillis() - startTime, traceId);
+                System.currentTimeMillis() - startTime, traceId, null);
         }
         finally {
             // 清理本轮 Tool 聚合和图表暂存，避免后续请求读取旧数据。
@@ -333,7 +325,7 @@ public class ErpAssistantService {
             mode, question, traceId, TenantContext.requireEntCode(), conversationId);
         // 下游只接收统一的 delta、可选 chart、done 或 error 事件。
         return this.lifecycleService.recordStream(
-            responseFlux, question, conversationId, mode, modelId, modelName, traceId);
+            responseFlux, question, conversationId, mode, modelId, modelName, traceId, null);
     }
 
     /**
@@ -343,12 +335,17 @@ public class ErpAssistantService {
      * @param conversationId              会话 ID
      * @param modelId                     模型 ID
      * @param requireExistingConversation 是否要求会话已存在
+     * @param knowledgeBaseId              可空知识库 ID
      * @return 文本回答，图表固定为空
      */
     public ChatAnswerResult askKnowledge(String question, String conversationId, String modelId,
-            boolean requireExistingConversation) {
+            boolean requireExistingConversation, String knowledgeBaseId) {
         String mode = "knowledge";
         String modelName = this.clientProvider.resolveModelName(modelId);
+        // 知识库必须在会话写入、向量检索和模型调用前完成租户及状态校验。
+        RagRequestContext ragContext = this.ragAnswerService.prepare(
+            knowledgeBaseId, question, RagRetrievalDefaults.KNOWLEDGE_TOP_K,
+            RagRetrievalDefaults.KNOWLEDGE_SIMILARITY_THRESHOLD);
         // knowledge 模式仍复用统一会话和计费流程，但不会进入业务数据守卫。
         this.lifecycleService.prepareConversation(
             conversationId, question, mode, requireExistingConversation);
@@ -368,9 +365,7 @@ public class ErpAssistantService {
                     .param(ChatMemory.CONVERSATION_ID, conversationId)
                     .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE)
                     .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build(),
-                        QuestionAnswerAdvisor.builder(this.vectorStore)
-                            .searchRequest(this.buildKnowledgeSearchRequest(question))
-                            .build()))
+                        ragContext.advisor()))
                 .user(question)
                 .call()
                 .chatResponse();
@@ -378,7 +373,7 @@ public class ErpAssistantService {
             // 统一保存知识回答；由于本轮没有业务 Tool 结果，图表保持为空。
             return this.lifecycleService.finishNonStreaming(
                 question, conversationId, mode, modelId, modelName, response,
-                System.currentTimeMillis() - startTime, traceId);
+                System.currentTimeMillis() - startTime, traceId, ragContext);
         }
         finally {
             // 保持三种模式一致的 trace 清理语义。
@@ -393,12 +388,17 @@ public class ErpAssistantService {
      * @param conversationId              会话 ID
      * @param modelId                     模型 ID
      * @param requireExistingConversation 是否要求会话已存在
+     * @param knowledgeBaseId              可空知识库 ID
      * @return 类型化事件流
      */
     public Flux<ChatStreamFrame> askKnowledgeStream(String question, String conversationId,
-            String modelId, boolean requireExistingConversation) {
+            String modelId, boolean requireExistingConversation, String knowledgeBaseId) {
         String mode = "knowledge";
         String modelName = this.clientProvider.resolveModelName(modelId);
+        // 流式调用也必须先固定本轮知识库和资格过滤链。
+        RagRequestContext ragContext = this.ragAnswerService.prepare(
+            knowledgeBaseId, question, RagRetrievalDefaults.KNOWLEDGE_TOP_K,
+            RagRetrievalDefaults.KNOWLEDGE_SIMILARITY_THRESHOLD);
         // 先完成会话准备，确保流式异常或取消时也能按统一状态收口。
         this.lifecycleService.prepareConversation(
             conversationId, question, mode, requireExistingConversation);
@@ -417,13 +417,11 @@ public class ErpAssistantService {
                     .param(ChatMemory.CONVERSATION_ID, conversationId)
                     .param(ChatClientAttributes.TOOL_CALLING_ADVISOR_AUTO_REGISTER.getKey(), Boolean.FALSE)
                     .advisors(MessageChatMemoryAdvisor.builder(this.chatMemory).build(),
-                        QuestionAnswerAdvisor.builder(this.vectorStore)
-                            .searchRequest(this.buildKnowledgeSearchRequest(question))
-                            .build()))
+                        ragContext.advisor()))
                 .user(question)
                 .stream()
                 .chatResponse(),
-            question, conversationId, mode, modelId, modelName, traceId);
+            question, conversationId, mode, modelId, modelName, traceId, ragContext);
     }
 
     /**
@@ -490,19 +488,26 @@ public class ErpAssistantService {
     /**
      * 仅从向量库检索租户隔离的文档片段，不调用 LLM。
      *
-     * @param query 检索文本
-     * @param topK  返回数量
-     * @return 文档片段列表
+     * @param query           检索文本
+     * @param topK            返回数量
+     * @param knowledgeBaseId 可空知识库 ID
+     * @return 实际知识库和文档片段列表
      */
-    public List<DocSnippet> searchDocs(String query, int topK) {
+    public RagSearchResult searchDocs(String query, int topK, String knowledgeBaseId) {
         // 文档搜索是纯向量检索，不进入会话、LLM、Tool Calling 或计费链路。
-        return this.vectorStore.similaritySearch(
-            this.buildTenantSearchRequest(query, topK, 0.0)).stream()
+        RagRequestContext ragContext = this.ragAnswerService.prepare(
+            knowledgeBaseId, query, topK, 0.0);
+        List<DocSnippet> documents = this.ragAnswerService.search(query, ragContext).stream()
             .map(document -> new DocSnippet(
                 document.getText(),
                 (String) document.getMetadata().get("source"),
-                document.getScore()))
+                document.getScore(),
+                String.valueOf(document.getMetadata().get("document_id")),
+                this.readIntMetadata(document.getMetadata().get("document_version")),
+                String.valueOf(document.getMetadata().get("chunk_id")),
+                this.readIntMetadata(document.getMetadata().get("chunk_index"))))
             .collect(Collectors.toList());
+        return new RagSearchResult(ragContext.knowledgeBaseId(), documents);
     }
 
     /**
@@ -519,46 +524,24 @@ public class ErpAssistantService {
     }
 
     /**
-     * 构建带默认数量和阈值的租户隔离向量检索请求。
+     * 安全读取受管向量的整数元数据。
      *
-     * @param query 检索文本
-     * @return 向量检索请求
+     * @param value 元数据值
+     * @return 整数值，非法值返回零
      */
-    private SearchRequest buildTenantSearchRequest(String query) {
-        return this.buildTenantSearchRequest(query, 5, DEFAULT_SIMILARITY_THRESHOLD);
-    }
-
-    /**
-     * 构建带自定义数量和阈值的租户隔离向量检索请求。
-     *
-     * @param query     检索文本
-     * @param topK      返回数量
-     * @param threshold 相似度阈值
-     * @return 向量检索请求
-     */
-    private SearchRequest buildTenantSearchRequest(String query, int topK, double threshold) {
-        String entCode = TenantContext.requireEntCode();
-        // 将租户条件写入向量检索表达式，避免跨租户召回知识片段。
-        FilterExpressionBuilder builder = new FilterExpressionBuilder();
-        Filter.Expression filter = builder.eq("ent_code", entCode).build();
-
-        return SearchRequest.builder()
-            .query(query)
-            .topK(topK)
-            .similarityThreshold(threshold)
-            .filterExpression(filter)
-            .build();
-    }
-
-    /**
-     * 构建知识问答模式的租户隔离向量检索请求。
-     *
-     * @param query 检索文本
-     * @return 扩大召回范围后的知识检索请求
-     */
-    private SearchRequest buildKnowledgeSearchRequest(String query) {
-        return this.buildTenantSearchRequest(
-            query, KNOWLEDGE_TOP_K, KNOWLEDGE_SIMILARITY_THRESHOLD);
+    private int readIntMetadata(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text) {
+            try {
+                return Integer.parseInt(text);
+            }
+            catch (NumberFormatException ex) {
+                return 0;
+            }
+        }
+        return 0;
     }
 
 }

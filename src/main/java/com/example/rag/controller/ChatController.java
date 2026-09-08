@@ -1,11 +1,13 @@
 package com.example.rag.controller;
 
-import com.example.rag.chat.DocumentLoaderService;
 import com.example.rag.chat.ErpAssistantService;
 import com.example.rag.chat.dto.ChatAnswerResult;
 import com.example.rag.chat.dto.ChatStreamFrame;
 import com.example.rag.chat.dto.DocSnippet;
+import com.example.rag.chat.dto.RagSearchResult;
 import com.example.rag.config.ModelProperties;
+import com.example.rag.knowledge.KnowledgeDocumentIngestionService;
+import com.example.rag.vo.KnowledgeVO;
 import com.example.rag.vo.ChatVO;
 import com.example.rag.vo.RespVO;
 import org.springframework.http.MediaType;
@@ -36,15 +38,15 @@ import java.util.stream.Collectors;
 public class ChatController {
 
     private final ErpAssistantService assistantService;
-    private final DocumentLoaderService documentLoaderService;
     private final ModelProperties modelProperties;
+    private final KnowledgeDocumentIngestionService ingestionService;
 
     public ChatController(ErpAssistantService assistantService,
-                          DocumentLoaderService documentLoaderService,
-                          ModelProperties modelProperties) {
+                          ModelProperties modelProperties,
+                          KnowledgeDocumentIngestionService ingestionService) {
         this.assistantService = assistantService;
-        this.documentLoaderService = documentLoaderService;
         this.modelProperties = modelProperties;
+        this.ingestionService = ingestionService;
     }
 
     // ==================== 文档管理 ====================
@@ -54,7 +56,7 @@ public class ChatController {
      */
     @PostMapping("/load")
     public RespVO<ChatVO.LoadDocumentsResponse> loadDocuments() {
-        int count = documentLoaderService.loadFromClasspath();
+        int count = ingestionService.importClasspathDocuments();
         return RespVO.success(new ChatVO.LoadDocumentsResponse(count));
     }
 
@@ -67,8 +69,9 @@ public class ChatController {
         String filename = file.getOriginalFilename();
         if (filename == null) filename = "unknown.txt";
 
-        int count = documentLoaderService.loadFile(file.getInputStream(), filename);
-        return RespVO.success(new ChatVO.UploadFileResponse(filename, count));
+        KnowledgeVO.KnowledgeDocumentImportResponse result = ingestionService.importFile(
+                null, null, file.getInputStream(), filename, file.getContentType(), file.getSize());
+        return RespVO.success(new ChatVO.UploadFileResponse(filename, result.chunksLoaded()));
     }
 
     // ==================== AI 问答 ====================
@@ -86,12 +89,15 @@ public class ChatController {
 
         ChatAnswerResult result = switch (request.mode()) {
             case "data" -> assistantService.askData(request.question(), cid, mid, hasConversationId);
-            case "knowledge" -> assistantService.askKnowledge(request.question(), cid, mid, hasConversationId);
-            default -> assistantService.ask(request.question(), cid, mid, hasConversationId);
+            case "knowledge" -> assistantService.askKnowledge(
+                    request.question(), cid, mid, hasConversationId, request.knowledgeBaseId());
+            default -> assistantService.ask(
+                    request.question(), cid, mid, hasConversationId, request.knowledgeBaseId());
         };
 
         return RespVO.success(new ChatVO.AskResponse(
-                cid, request.question(), result.answer(), request.mode(), result.chart()));
+                cid, request.question(), result.answer(), request.mode(), result.chart(),
+                result.knowledgeBaseId(), result.citations(), result.ragDocCount()));
     }
 
     @GetMapping(value = "/ask/stream", produces = {MediaType.TEXT_EVENT_STREAM_VALUE, MediaType.APPLICATION_JSON_VALUE})
@@ -103,8 +109,10 @@ public class ChatController {
             // 前后端一体部署直接使用类型化 SSE，每个 data 都是可独立解析的 JSON。
             Flux<ChatStreamFrame> frames = switch (request.mode()) {
                 case "data" -> assistantService.askDataStream(request.question(), cid, mid, hasConversationId);
-                case "knowledge" -> assistantService.askKnowledgeStream(request.question(), cid, mid, hasConversationId);
-                default -> assistantService.askStream(request.question(), cid, mid, hasConversationId);
+                case "knowledge" -> assistantService.askKnowledgeStream(
+                        request.question(), cid, mid, hasConversationId, request.knowledgeBaseId());
+                default -> assistantService.askStream(
+                        request.question(), cid, mid, hasConversationId, request.knowledgeBaseId());
             };
             Flux<ServerSentEvent<Object>> body = frames.map(frame -> ServerSentEvent.builder(frame.data())
                     .event(frame.event())
@@ -155,14 +163,17 @@ public class ChatController {
      */
     @GetMapping("/search")
     public RespVO<ChatVO.DocSearchResponse> search(ChatVO.DocSearchRequest request) {
-        List<DocSnippet> raw = assistantService.searchDocs(
-                request.query(), request.topK());
+        RagSearchResult searchResult = assistantService.searchDocs(
+                request.query(), request.topK(), request.knowledgeBaseId());
+        List<DocSnippet> raw = searchResult.documents();
 
         List<ChatVO.DocSnippetResponse> results = raw.stream()
-                .map(d -> new ChatVO.DocSnippetResponse(d.text(), d.source(), d.score()))
+                .map(d -> new ChatVO.DocSnippetResponse(d.text(), d.source(), d.score(),
+                        d.documentId(), d.documentVersion(), d.chunkId(), d.chunkIndex()))
                 .collect(Collectors.toList());
 
-        return RespVO.success(new ChatVO.DocSearchResponse(request.query(), results));
+        return RespVO.success(new ChatVO.DocSearchResponse(
+                request.query(), searchResult.knowledgeBaseId(), results));
     }
 
 }

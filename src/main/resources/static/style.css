@@ -78,6 +78,19 @@ body {
   font-size: 12px; font-weight: 600; color: var(--text-secondary);
   text-transform: uppercase; letter-spacing: .5px; margin-bottom: 10px;
 }
+.knowledge-base-panel select {
+  width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--surface); color: var(--text); font-size: 12px;
+}
+.knowledge-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 8px; }
+.knowledge-actions .btn { padding: 5px 3px; }
+.knowledge-documents { max-height: 190px; overflow-y: auto; margin-top: 8px; }
+.knowledge-documents .placeholder-text { margin-top: 10px; }
+.knowledge-document-card { padding: 8px; margin-top: 6px; border-radius: 7px; background: var(--bg); }
+.knowledge-document-title { font-size: 12px; font-weight: 600; word-break: break-all; }
+.knowledge-document-meta { margin-top: 3px; color: var(--text-muted); font-size: 11px; }
+.knowledge-document-error { margin-top: 4px; color: var(--error); font-size: 11px; word-break: break-word; }
+.knowledge-document-actions { display: flex; gap: 5px; margin-top: 6px; }
 
 /* 按钮 */
 .btn {
@@ -117,6 +130,13 @@ body {
 .search-result-card { background: var(--bg); border-radius: 8px; padding: 10px; margin-bottom: 6px; font-size: 12px; line-height: 1.6; }
 .search-result-card .meta { display: flex; gap: 10px; margin-top: 4px; font-size: 11px; color: var(--text-muted); }
 .search-result-card .score { color: var(--success); font-weight: 600; }
+
+/* 回答引用 */
+.citation-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.citation-card { border: 1px solid var(--border); border-radius: 7px; background: var(--surface); font-size: 12px; }
+.citation-card summary { padding: 7px 9px; cursor: pointer; color: var(--primary); font-weight: 600; }
+.citation-excerpt { padding: 0 9px 7px; color: var(--text-secondary); line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.citation-identity { padding: 6px 9px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 11px; word-break: break-all; }
 
 /* Toast */
 .toast {

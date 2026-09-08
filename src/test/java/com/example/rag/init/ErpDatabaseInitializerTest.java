@@ -175,4 +175,110 @@ class ErpDatabaseInitializerTest {
 		verify(erpJdbcTemplate, never()).execute(contains("ALTER TABLE a_chat_message ADD COLUMN chart_spec"));
 	}
 
+	/**
+	 * 验证内置脚本包含知识库、文档版本和引用快照结构。
+	 */
+	@Test
+	public void shouldContainKnowledgeBaseSchema() throws Exception {
+		String script = Files.readString(Path.of("src/main/resources/db/init/conversation-billing-schema.sql"),
+			StandardCharsets.UTF_8);
+
+		assertThat(script)
+			.contains("CREATE TABLE IF NOT EXISTS a_knowledge_base")
+			.contains("uk_ent_knowledge_base")
+			.contains("CREATE TABLE IF NOT EXISTS a_knowledge_document")
+			.contains("uk_ent_document_version")
+			.contains("knowledge_base_id   VARCHAR(36)")
+			.contains("embedding_model     VARCHAR(150)")
+			.contains("rag_citations       JSON");
+	}
+
+	/**
+	 * 验证旧知识文档表缺少嵌入模型字段时会执行幂等升级。
+	 */
+	@Test
+	public void shouldAddEmbeddingModelColumnForExistingDatabase() {
+		ByteArrayResource emptyScript = new ByteArrayResource(new byte[0]);
+		when(resourceLoader.getResource("classpath:db/init/conversation-billing-schema.sql"))
+			.thenReturn(emptyScript);
+		when(resourceLoader.getResource("classpath:db/init/business-data.sql"))
+			.thenReturn(emptyScript);
+		when(erpJdbcTemplate.queryForObject(contains("information_schema.COLUMNS"), eq(Integer.class),
+			eq("a_chat_message"), anyString())).thenReturn(1);
+		when(erpJdbcTemplate.queryForObject(contains("information_schema.COLUMNS"), eq(Integer.class),
+			eq("a_knowledge_document"), eq("embedding_model"))).thenReturn(0);
+
+		initializer.initialize();
+
+		verify(erpJdbcTemplate).execute(
+			"ALTER TABLE a_knowledge_document ADD COLUMN embedding_model VARCHAR(150) NULL "
+				+ "COMMENT '成功入库使用的嵌入模型身份' AFTER checksum_sha256");
+	}
+
+	/**
+	 * 验证嵌入模型字段已存在时重复启动不会再次修改表结构。
+	 */
+	@Test
+	public void shouldNotRepeatEmbeddingModelMigrationAcrossRestarts() {
+		ByteArrayResource emptyScript = new ByteArrayResource(new byte[0]);
+		when(resourceLoader.getResource("classpath:db/init/conversation-billing-schema.sql"))
+			.thenReturn(emptyScript);
+		when(resourceLoader.getResource("classpath:db/init/business-data.sql"))
+			.thenReturn(emptyScript);
+		when(erpJdbcTemplate.queryForObject(contains("information_schema.COLUMNS"), eq(Integer.class),
+			eq("a_chat_message"), anyString())).thenReturn(1);
+		when(erpJdbcTemplate.queryForObject(contains("information_schema.COLUMNS"), eq(Integer.class),
+			eq("a_knowledge_document"), eq("embedding_model"))).thenReturn(1);
+
+		initializer.initialize();
+		initializer.initialize();
+
+		verify(erpJdbcTemplate, times(2)).queryForObject(contains("information_schema.COLUMNS"),
+			eq(Integer.class), eq("a_knowledge_document"), eq("embedding_model"));
+		verify(erpJdbcTemplate, never()).execute(contains("ADD COLUMN embedding_model VARCHAR(150)"));
+	}
+
+	/**
+	 * 验证旧消息表缺少知识库字段时会执行幂等升级。
+	 */
+	@Test
+	public void shouldAddKnowledgeColumnsForExistingDatabase() {
+		ByteArrayResource emptyScript = new ByteArrayResource(new byte[0]);
+		when(resourceLoader.getResource("classpath:db/init/conversation-billing-schema.sql"))
+			.thenReturn(emptyScript);
+		when(resourceLoader.getResource("classpath:db/init/business-data.sql"))
+			.thenReturn(emptyScript);
+		when(erpJdbcTemplate.queryForObject(contains("information_schema.COLUMNS"), eq(Integer.class),
+			eq("a_chat_message"), eq("chart_spec"))).thenReturn(1);
+		when(erpJdbcTemplate.queryForObject(contains("information_schema.COLUMNS"), eq(Integer.class),
+			eq("a_chat_message"), eq("knowledge_base_id"))).thenReturn(0);
+		when(erpJdbcTemplate.queryForObject(contains("information_schema.COLUMNS"), eq(Integer.class),
+			eq("a_chat_message"), eq("rag_citations"))).thenReturn(0);
+
+		initializer.initialize();
+
+		verify(erpJdbcTemplate).execute(contains("ADD COLUMN knowledge_base_id VARCHAR(36)"));
+		verify(erpJdbcTemplate).execute(contains("ADD COLUMN rag_citations JSON"));
+	}
+
+	/**
+	 * 验证消息表已包含知识库字段时重复启动不会再次修改表结构。
+	 */
+	@Test
+	public void shouldNotRepeatKnowledgeColumnMigrationAcrossRestarts() {
+		ByteArrayResource emptyScript = new ByteArrayResource(new byte[0]);
+		when(resourceLoader.getResource("classpath:db/init/conversation-billing-schema.sql"))
+			.thenReturn(emptyScript);
+		when(resourceLoader.getResource("classpath:db/init/business-data.sql"))
+			.thenReturn(emptyScript);
+		when(erpJdbcTemplate.queryForObject(contains("information_schema.COLUMNS"), eq(Integer.class),
+			eq("a_chat_message"), anyString())).thenReturn(1);
+
+		initializer.initialize();
+		initializer.initialize();
+
+		verify(erpJdbcTemplate, never()).execute(contains("ADD COLUMN knowledge_base_id VARCHAR(36)"));
+		verify(erpJdbcTemplate, never()).execute(contains("ADD COLUMN rag_citations JSON"));
+	}
+
 }

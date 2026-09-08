@@ -113,6 +113,8 @@ public class ErpDatabaseInitializer implements ApplicationRunner {
 		log.info("开始初始化 ERP MySQL 表结构和演示数据");
 		executeScript(CONVERSATION_BILLING_SCRIPT);
 		ensureChatMessageChartSpecColumn();
+		ensureChatMessageKnowledgeColumns();
+		ensureKnowledgeDocumentEmbeddingModelColumn();
 		executeScript(BUSINESS_DATA_SCRIPT);
 		log.info("ERP MySQL 表结构和演示数据初始化完成");
 	}
@@ -467,6 +469,51 @@ public class ErpDatabaseInitializer implements ApplicationRunner {
 			log.info("检测到对话消息表缺少图表字段，开始执行幂等升级");
 			erpJdbcTemplate.execute("ALTER TABLE a_chat_message ADD COLUMN chart_spec TEXT NULL "
 				+ "COMMENT '助手图表数据（ChartSpec JSON，最大60KiB）' AFTER tool_calls_count");
+		}
+	}
+
+	/**
+	 * 确保已有对话消息表包含知识库和引用快照字段。
+	 */
+	private void ensureChatMessageKnowledgeColumns() {
+		ensureChatMessageColumn("knowledge_base_id",
+			"ALTER TABLE a_chat_message ADD COLUMN knowledge_base_id VARCHAR(36) NULL "
+				+ "COMMENT '知识问答实际使用的知识库ID' AFTER mode");
+		ensureChatMessageColumn("rag_citations",
+			"ALTER TABLE a_chat_message ADD COLUMN rag_citations JSON NULL "
+				+ "COMMENT 'RAG引用快照（最大32KiB）' AFTER rag_doc_count");
+	}
+
+	/**
+	 * 幂等增加指定对话消息字段。
+	 *
+	 * @param columnName 字段名
+	 * @param alterSql   字段升级 SQL
+	 */
+	private void ensureChatMessageColumn(String columnName, String alterSql) {
+		Integer count = erpJdbcTemplate.queryForObject(
+			"SELECT COUNT(1) FROM information_schema.COLUMNS "
+				+ "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+			Integer.class, "a_chat_message", columnName);
+		if (count == null || count == 0) {
+			log.info("检测到对话消息表缺少 {} 字段，开始执行幂等升级", columnName);
+			erpJdbcTemplate.execute(alterSql);
+		}
+	}
+
+	/**
+	 * 确保已有知识文档版本表包含嵌入模型身份字段。
+	 */
+	private void ensureKnowledgeDocumentEmbeddingModelColumn() {
+		Integer count = erpJdbcTemplate.queryForObject(
+			"SELECT COUNT(1) FROM information_schema.COLUMNS "
+				+ "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+			Integer.class, "a_knowledge_document", "embedding_model");
+		if (count == null || count == 0) {
+			log.info("检测到知识文档版本表缺少嵌入模型字段，开始执行幂等升级");
+			erpJdbcTemplate.execute(
+				"ALTER TABLE a_knowledge_document ADD COLUMN embedding_model VARCHAR(150) NULL "
+					+ "COMMENT '成功入库使用的嵌入模型身份' AFTER checksum_sha256");
 		}
 	}
 

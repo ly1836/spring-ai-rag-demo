@@ -167,4 +167,38 @@
         </plugins>
     </build>
 
+    <profiles>
+        <!-- 真实 RAG 评测仅通过显式 Profile 运行，普通单元测试保持离线。 -->
+        <profile>
+            <id>rag-eval</id>
+            <properties>
+                <rag.eval.enabled>true</rag.eval.enabled>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <includes>
+                                <include>**/RagEvaluationIT.java</include>
+                            </includes>
+                            <systemPropertyVariables>
+                                <rag.eval.enabled>${rag.eval.enabled}</rag.eval.enabled>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
 </project>

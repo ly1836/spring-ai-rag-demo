@@ -61,7 +61,9 @@ public final class ConversationVO {
 	 * @param toolCalls        工具调用记录（JSON 数组字符串）
 	 * @param toolCallsCount   工具调用次数
 	 * @param chart            助手图表数据，无图表时为空
+	 * @param knowledgeBaseId  实际知识库 ID
 	 * @param ragDocCount      RAG 检索的文档片段数
+	 * @param citations        不可变引用快照
 	 * @param durationMs       LLM 响应耗时（毫秒）
 	 * @param status           消息状态：success / cancelled / error / timeout
 	 * @param errorMessage     错误信息（仅失败时有值）
@@ -70,7 +72,8 @@ public final class ConversationVO {
 	public record ChatMessageItemResponse(
 			String messageId, String role, String content, String mode, String model,
 			int promptTokens, int completionTokens, int totalTokens,
-			String toolCalls, int toolCallsCount, ChartVO.ChartSpec chart, int ragDocCount,
+			String toolCalls, int toolCallsCount, ChartVO.ChartSpec chart, String knowledgeBaseId,
+			int ragDocCount, List<ChatVO.CitationResponse> citations,
 			Integer durationMs, String status, String errorMessage, String createdAt) {
 	}
 
@@ -88,7 +91,9 @@ public final class ConversationVO {
 	 * @param toolCalls        工具调用记录（JSON 数组字符串）
 	 * @param toolCallsCount   工具调用次数
 	 * @param chartSpec        助手图表数据 JSON
+	 * @param knowledgeBaseId  实际知识库 ID
 	 * @param ragDocCount      RAG 检索的文档片段数
+	 * @param ragCitations     引用快照 JSON
 	 * @param durationMs       LLM 响应耗时（毫秒）
 	 * @param status           消息状态
 	 * @param errorMessage     错误信息
@@ -97,7 +102,8 @@ public final class ConversationVO {
 	public record ChatMessageRecord(
 			String messageId, String role, String content, String mode, String model,
 			int promptTokens, int completionTokens, int totalTokens,
-			String toolCalls, int toolCallsCount, String chartSpec, int ragDocCount,
+			String toolCalls, int toolCallsCount, String chartSpec, String knowledgeBaseId,
+			int ragDocCount, String ragCitations,
 			Integer durationMs, String status, String errorMessage, String createdAt) {
 	}
 

@@ -22,13 +22,28 @@ public final class ChatVO {
 	 * @param conversationId 会话 ID（为空则自动创建新会话）
 	 * @param mode           回答模式：auto（智能）/ data（数据查询）/ knowledge（知识问答），默认 auto
 	 * @param modelId        模型 ID（对应 app.models[].id），为空时使用默认模型
+	 * @param knowledgeBaseId auto/knowledge 模式使用的可空知识库 ID
 	 */
-	public record AskRequest(String question, String conversationId, String mode, String modelId) {
+	public record AskRequest(String question, String conversationId, String mode, String modelId,
+			String knowledgeBaseId) {
 		public AskRequest {
 			question = Objects.requireNonNullElse(question, "");
 			conversationId = Objects.requireNonNullElse(conversationId, "");
 			mode = (mode == null || mode.isBlank()) ? "auto" : mode;
 			modelId = Objects.requireNonNullElse(modelId, "");
+			knowledgeBaseId = Objects.requireNonNullElse(knowledgeBaseId, "");
+		}
+
+		/**
+		 * 兼容旧调用方构造不含知识库 ID 的请求。
+		 *
+		 * @param question       用户问题
+		 * @param conversationId 会话 ID
+		 * @param mode           回答模式
+		 * @param modelId        模型 ID
+		 */
+		public AskRequest(String question, String conversationId, String mode, String modelId) {
+			this(question, conversationId, mode, modelId, "");
 		}
 	}
 
@@ -36,12 +51,24 @@ public final class ChatVO {
 	 * 文档相似度搜索入参。
 	 *
 	 * @param query 搜索关键词
-	 * @param topK  返回结果数量，默认 5
+	 * @param topK  返回结果数量，默认 5，最大 24
+	 * @param knowledgeBaseId 可空知识库 ID
 	 */
-	public record DocSearchRequest(String query, Integer topK) {
+	public record DocSearchRequest(String query, Integer topK, String knowledgeBaseId) {
 		public DocSearchRequest {
 			query = Objects.requireNonNullElse(query, "");
 			topK = (topK == null || topK <= 0) ? 5 : topK;
+			knowledgeBaseId = Objects.requireNonNullElse(knowledgeBaseId, "");
+		}
+
+		/**
+		 * 兼容旧调用方构造默认知识库搜索请求。
+		 *
+		 * @param query 搜索关键词
+		 * @param topK 返回结果数量
+		 */
+		public DocSearchRequest(String query, Integer topK) {
+			this(query, topK, "");
 		}
 	}
 
@@ -72,9 +99,13 @@ public final class ChatVO {
 	 * @param answer         LLM 生成的回答
 	 * @param mode           实际使用的回答模式
 	 * @param chart          LLM 选择并由后端编译的图表，无图表时为空
+	 * @param knowledgeBaseId 实际使用的知识库 ID
+	 * @param citations      经验证的引用数组
+	 * @param ragDocCount    本轮合格召回分片数
 	 */
 	public record AskResponse(String conversationId, String question, String answer, String mode,
-			ChartVO.ChartSpec chart) {
+			ChartVO.ChartSpec chart, String knowledgeBaseId, List<CitationResponse> citations,
+			int ragDocCount) {
 	}
 
 	/**
@@ -83,6 +114,33 @@ public final class ChatVO {
 	 * @param text 本次文本增量
 	 */
 	public record StreamDelta(String text) {
+	}
+
+	/**
+	 * 回答引用对象。
+	 *
+	 * @param citationId       回答中的引用序号
+	 * @param knowledgeBaseId  知识库 ID
+	 * @param documentId       稳定文档 ID
+	 * @param documentVersion  文档版本号
+	 * @param chunkId          分片 ID
+	 * @param chunkIndex       分片顺序
+	 * @param source           来源名称
+	 * @param excerpt          安全摘要
+	 * @param score            相似度分数
+	 */
+	public record CitationResponse(int citationId, String knowledgeBaseId, String documentId,
+			int documentVersion, String chunkId, int chunkIndex, String source,
+			String excerpt, Double score) {
+	}
+
+	/**
+	 * 类型化 SSE 引用事件。
+	 *
+	 * @param knowledgeBaseId 实际知识库 ID
+	 * @param citations       本轮完整引用数组
+	 */
+	public record StreamCitations(String knowledgeBaseId, List<CitationResponse> citations) {
 	}
 
 	/**
@@ -98,8 +156,9 @@ public final class ChatVO {
 	 *
 	 * @param conversationId 会话 ID
 	 * @param status         完成状态
+	 * @param knowledgeBaseId 本轮实际使用的知识库 ID，非 RAG 模式为空
 	 */
-	public record StreamDone(String conversationId, String status) {
+	public record StreamDone(String conversationId, String status, String knowledgeBaseId) {
 	}
 
 	/**
@@ -114,20 +173,27 @@ public final class ChatVO {
 	/**
 	 * 文档搜索结果中的单个文档片段。
 	 *
-	 * @param text   文档片段文本内容
-	 * @param source 来源文件名
-	 * @param score  与查询的相似度分数（0~1，越高越相似）
+	 * @param text             文档片段文本内容
+	 * @param source           来源文件名
+	 * @param score            与查询的相似度分数（0~1，越高越相似）
+	 * @param documentId       稳定文档 ID
+	 * @param documentVersion  文档版本
+	 * @param chunkId          稳定分片 ID
+	 * @param chunkIndex       分片顺序
 	 */
-	public record DocSnippetResponse(String text, String source, Double score) {
+	public record DocSnippetResponse(String text, String source, Double score, String documentId,
+			int documentVersion, String chunkId, int chunkIndex) {
 	}
 
 	/**
 	 * 文档搜索出参。
 	 *
-	 * @param query   原始搜索关键词
-	 * @param results 相似文档片段列表
+	 * @param query           原始搜索关键词
+	 * @param knowledgeBaseId 实际使用的知识库 ID
+	 * @param results         相似文档片段列表
 	 */
-	public record DocSearchResponse(String query, List<DocSnippetResponse> results) {
+	public record DocSearchResponse(String query, String knowledgeBaseId,
+			List<DocSnippetResponse> results) {
 	}
 
 	/**

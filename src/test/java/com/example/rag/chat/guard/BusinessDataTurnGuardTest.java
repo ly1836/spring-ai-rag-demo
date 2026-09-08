@@ -14,6 +14,7 @@ import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
 
 import reactor.core.publisher.Flux;
 
@@ -219,5 +220,60 @@ class BusinessDataTurnGuardTest {
 			.isFalse();
 		assertThat(guard.requiresCurrentBusinessData("auto", "What are the product specifications?"))
 			.isFalse();
+	}
+
+	/**
+	 * 验证自动模式非流式重试合并 Token 后仍保留本轮 RAG 证据元数据。
+	 */
+	@Test
+	public void shouldKeepRagMetadataWhenMergingNonStreamingRetryUsage() {
+		ToolResultRecorder recorder = new ToolResultRecorder();
+		BusinessDataTurnGuard guard = new BusinessDataTurnGuard(recorder, new ToolCallRecorder());
+		List<String> evidence = List.of("非流式重试证据");
+
+		ChatResponse response = guard.ensureNonStreaming(
+			this.response("首次回答", 1, 2, 3),
+			() -> {
+				recorder.capture("t1", "ENT001", "c1", "query_orders", "database",
+					"[{\"status\":\"已完成\"}]");
+				return ChatResponse.builder().from(this.response("重试回答", 4, 5, 9))
+					.metadata(RetrievalAugmentationAdvisor.DOCUMENT_CONTEXT, evidence)
+					.build();
+			},
+			"auto", "查询订单并说明产品规则", "t1", "ENT001", "c1");
+
+		// 读取合并后的自定义证据元数据，避免泛型推断影响断言。
+		Object actualEvidence = response.getMetadata()
+			.get(RetrievalAugmentationAdvisor.DOCUMENT_CONTEXT);
+		assertThat(actualEvidence).isEqualTo(evidence);
+		assertThat(response.getMetadata().getUsage().getTotalTokens()).isEqualTo(12);
+	}
+
+	/**
+	 * 验证自动模式流式重试合并 Token 后仍保留本轮 RAG 证据元数据。
+	 */
+	@Test
+	public void shouldKeepRagMetadataWhenMergingStreamingRetryUsage() {
+		ToolResultRecorder recorder = new ToolResultRecorder();
+		BusinessDataTurnGuard guard = new BusinessDataTurnGuard(recorder, new ToolCallRecorder());
+		List<String> evidence = List.of("流式重试证据");
+
+		ChatResponse response = guard.ensureStreaming(
+			Flux.just(this.response("首次回答", 1, 2, 3)),
+			() -> Flux.defer(() -> {
+				recorder.capture("t1", "ENT001", "c1", "query_orders", "database",
+					"[{\"status\":\"已完成\"}]");
+				return Flux.just(ChatResponse.builder().from(this.response("重试回答", 4, 5, 9))
+					.metadata(RetrievalAugmentationAdvisor.DOCUMENT_CONTEXT, evidence)
+					.build());
+			}),
+			"auto", "查询订单并说明产品规则", "t1", "ENT001", "c1")
+			.blockLast();
+
+		// 读取合并后的自定义证据元数据，避免泛型推断影响断言。
+		Object actualEvidence = response.getMetadata()
+			.get(RetrievalAugmentationAdvisor.DOCUMENT_CONTEXT);
+		assertThat(actualEvidence).isEqualTo(evidence);
+		assertThat(response.getMetadata().getUsage().getTotalTokens()).isEqualTo(12);
 	}
 }

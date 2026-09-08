@@ -15,7 +15,7 @@
 - 数据库：
   - PostgreSQL + pgvector（向量库 `rag_demo`，`@Primary`，承载文档嵌入与 RAG 检索）
   - MySQL（ERP 业务库 `erp`，承载销售/采购/库存/财务/计费等业务表）
-- 嵌入模型：本地 ONNX Runtime 加载 `all-MiniLM-L6-v2`（384 维），无需远程 API
+- 嵌入模型：本地 ONNX Runtime 加载 `paraphrase-multilingual-MiniLM-L12-v2`（384 维、平均池化、支持中文），无需远程 API
 - LLM Provider：
   - DeepSeek（`@Primary`，默认 `deepseek-chat`）
   - OpenAI 兼容协议（指向 DashScope，承载通义千问系列）
@@ -25,7 +25,7 @@
 - 单模块 Spring Boot 应用，**无模块前缀**概念
 - 经典三层为主：Controller → Service → MyBatis-Plus / JdbcTemplate（无 JPA）
 - 业务域按职责划分子包，复杂业务可拆分为多个 Service / Helper 协作
-- AI 编排集中在 `chat/ErpAssistantService`，通过 `ChatClient` + `Advisor`（`MessageChatMemoryAdvisor`、`QuestionAnswerAdvisor`）组合能力
+- AI 编排集中在 `chat/ErpAssistantService`，通过 `ChatClient` + `Advisor`（`MessageChatMemoryAdvisor`、`RetrievalAugmentationAdvisor`）组合能力
 
 ## 包结构
 - `chat/` — 智能助手入口

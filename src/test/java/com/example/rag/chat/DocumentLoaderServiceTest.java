@@ -1,11 +1,16 @@
 package com.example.rag.chat;
 
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
 import ai.djl.huggingface.tokenizers.HuggingFaceTokenizer;
 import com.example.rag.config.TenantContext;
+import com.example.rag.chat.rag.EmbeddingModelMetadata;
+import com.example.rag.knowledge.dto.ManagedDocumentLoadResult;
+import com.example.rag.knowledge.dto.ManagedDocumentMetadata;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
@@ -139,6 +144,88 @@ class DocumentLoaderServiceTest {
 				"addSpecialTokens", "true",
 				"truncation", "false",
 				"padding", "false"));
+		}
+	}
+
+	/**
+	 * 验证受管文档分片写入完整稳定证据身份和连续序号。
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void shouldAttachManagedDocumentEvidenceMetadata() {
+		VectorStore vectorStore = mock(VectorStore.class);
+		DocumentLoaderService service = new DocumentLoaderService(vectorStore);
+		ArgumentCaptor<List<Document>> chunksCaptor = ArgumentCaptor.forClass(List.class);
+		TenantContext.setEntCode("ENT001");
+		try (service) {
+			service.loadManagedText("受管知识文档内容。".repeat(500),
+				new ManagedDocumentMetadata("ENT001", "kb-1", "doc-1", 2, "manual.txt"));
+
+			verify(vectorStore, atLeastOnce()).add(chunksCaptor.capture());
+			List<Document> chunks = chunksCaptor.getAllValues().stream().flatMap(List::stream).toList();
+			for (int index = 0; index < chunks.size(); index++) {
+				Map<String, Object> metadata = chunks.get(index).getMetadata();
+				assertThat(metadata.get("ent_code")).isEqualTo("ENT001");
+				assertThat(metadata.get("knowledge_base_id")).isEqualTo("kb-1");
+				assertThat(metadata.get("document_id")).isEqualTo("doc-1");
+				assertThat(metadata.get("document_version")).isEqualTo(2);
+				assertThat(metadata.get("chunk_id")).isInstanceOf(String.class);
+				assertThat(metadata.get("chunk_index")).isEqualTo(index);
+				assertThat(metadata.get("source")).isEqualTo("manual.txt");
+				assertThat(metadata.get(EmbeddingModelMetadata.METADATA_KEY))
+					.isEqualTo(EmbeddingModelMetadata.CURRENT_MODEL_ID);
+			}
+		}
+		finally {
+			TenantContext.clear();
+		}
+	}
+
+	/**
+	 * 验证短 UTF-8 TXT 上传时不会因不足分片器最小长度而丢失正文。
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void shouldExtractShortUtf8TextFromManagedFile() throws Exception {
+		VectorStore vectorStore = mock(VectorStore.class);
+		DocumentLoaderService service = new DocumentLoaderService(vectorStore);
+		ArgumentCaptor<List<Document>> chunksCaptor = ArgumentCaptor.forClass(List.class);
+		String text = "自测设备编号是 RAG-DEMO-2026。\n负责人是李明。\n数据刷新周期是15分钟。";
+
+		TenantContext.setEntCode("ENT001");
+		try (service; InputStream inputStream = new ByteArrayInputStream(
+				text.getBytes(StandardCharsets.UTF_8))) {
+			ManagedDocumentLoadResult result = service.loadManagedFile(inputStream,
+				new ManagedDocumentMetadata("ENT001", "kb-1", "doc-1", 1, "rag-smoke.txt"));
+
+			verify(vectorStore).add(chunksCaptor.capture());
+			assertThat(result.chunkCount()).isEqualTo(1);
+			assertThat(chunksCaptor.getValue()).singleElement()
+				.satisfies(chunk -> assertThat(chunk.getText()).contains("RAG-DEMO-2026", "李明", "15分钟"));
+		}
+		finally {
+			TenantContext.clear();
+		}
+	}
+
+	/**
+	 * 验证受管文档批次失败后按完整版本边界清理。
+	 */
+	@Test
+	public void shouldCleanManagedVersionWhenBatchWriteFails() {
+		VectorStore vectorStore = mock(VectorStore.class);
+		doThrow(new IllegalStateException("模拟受管写入失败")).when(vectorStore).add(anyList());
+		DocumentLoaderService service = new DocumentLoaderService(vectorStore);
+		TenantContext.setEntCode("ENT001");
+		try (service) {
+			assertThatThrownBy(() -> service.loadManagedText("受管知识文档内容。".repeat(50),
+				new ManagedDocumentMetadata("ENT001", "kb-1", "doc-1", 2, "manual.txt")))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessage("模拟受管写入失败");
+			verify(vectorStore).delete(any(Filter.Expression.class));
+		}
+		finally {
+			TenantContext.clear();
 		}
 	}
 

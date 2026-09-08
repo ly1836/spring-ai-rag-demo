@@ -1,5 +1,6 @@
 package com.example.rag.config;
 
+import com.example.rag.knowledge.KnowledgeInfrastructureException;
 import com.example.rag.vo.RespVO;
 
 import org.slf4j.Logger;
@@ -9,6 +10,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
@@ -19,8 +21,10 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
  * <p>
  * 异常分类：
  * <ul>
+ *   <li>{@link KnowledgeInfrastructureException} → SYSTEM_ERROR（知识解析或向量基础设施异常）</li>
  *   <li>{@link IllegalStateException} → BIZ_ERROR（业务逻辑异常，如配额超限、账户暂停）</li>
  *   <li>{@link IllegalArgumentException} → PARAM_ERROR（参数校验失败，如金额非法）</li>
+ *   <li>{@link MaxUploadSizeExceededException} → PARAM_ERROR（上传文件或请求超过大小限制）</li>
  *   <li>其他 {@link Exception} → SYSTEM_ERROR（系统内部错误，隐藏详情防止信息泄露）</li>
  * </ul>
  */
@@ -28,6 +32,13 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 public class GlobalExceptionHandler {
 
 	private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+	/** 处理知识文档解析、嵌入和向量基础设施异常，隐藏内部细节。 */
+	@ExceptionHandler(KnowledgeInfrastructureException.class)
+	public RespVO<?> handleKnowledgeInfrastructure(KnowledgeInfrastructureException e) {
+		log.error("知识文档基础设施异常", e);
+		return RespVO.error("SYSTEM_ERROR", "系统内部错误，请稍后重试", e);
+	}
 
 	/** 处理业务逻辑异常（配额不足、账户暂停等） */
 	@ExceptionHandler(IllegalStateException.class)
@@ -79,6 +90,13 @@ public class GlobalExceptionHandler {
 			current = current.getCause();
 		}
 		return false;
+	}
+
+	/** 处理上传文件或请求超过配置大小限制的异常。 */
+	@ExceptionHandler(MaxUploadSizeExceededException.class)
+	public RespVO<?> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException e) {
+		log.warn("上传文件或请求大小超过限制");
+		return RespVO.error("PARAM_ERROR", "上传文件或请求大小超过限制", e);
 	}
 
 }

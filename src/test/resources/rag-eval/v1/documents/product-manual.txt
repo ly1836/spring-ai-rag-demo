@@ -1,0 +1,5 @@
+Spring AI RAG Demo 提供 auto、data 和 knowledge 三种问答模式。knowledge 模式只使用知识库检索，不注册 ERP 业务工具。知识回答的证据通过方括号编号，例如 [1]。资料不足时，助手应明确说明当前知识库资料不足，不得编造答案。
+
+文档上传支持 PDF、Word、Excel、TXT、HTML 和 RTF。单文件上限为 500MB，整次请求上限为 550MB。提取后的文本最多 500 万字符，受管文档分片会写入稳定文档 ID、版本、分片 ID 和分片顺序。
+
+文档会按 token 边界二次切分，单个分片最多 128 个 WordPiece token。向量写入按批执行，每批最多 100 个分片。

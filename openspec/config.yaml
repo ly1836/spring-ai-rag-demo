@@ -12,7 +12,7 @@ context: |
   - 数据库:
     - PostgreSQL + pgvector（向量库 `rag_demo`，`@Primary` 数据源，承载 RAG 与 ChatMemory）
     - MySQL（ERP 业务库 `erp`，承载销售/采购/库存/财务/计费等业务表）
-  - 嵌入模型: 本地 ONNX Runtime 加载 `all-MiniLM-L6-v2`（384 维）
+  - 嵌入模型: 本地 ONNX Runtime 加载 `paraphrase-multilingual-MiniLM-L12-v2`（384 维、平均池化、支持中文）
   - LLM Provider: DeepSeek（`@Primary`）/ OpenAI 兼容协议（DashScope）/ Google Gemini
   - Web: Spring MVC + WebFlux（仅用于 SSE 流式 `Flux<String>`）
   - 构建: Maven 单模块（无子 module）
